@@ -16,13 +16,16 @@ public record TiendaResponseDTO(
         String horario,
         BigDecimal montoMinimo,
         String estado,
+        String categoria,
         String motivoRechazo
 ) {
     public static TiendaResponseDTO desde(Tienda t) {
         return new TiendaResponseDTO(
                 t.getId(), t.getOwnerId(), t.getNombre(), t.getDescripcion(),
                 t.getDireccion(), t.getLatitud(), t.getLongitud(), t.getLogoUrl(),
-                t.getHorario(), t.getMontoMinimo(), t.getEstado().name(), t.getMotivoRechazo()
+                t.getHorario(), t.getMontoMinimo(), t.getEstado().name(),
+                t.getCategoria() != null ? t.getCategoria().name() : null,
+                t.getMotivoRechazo()
         );
     }
 }

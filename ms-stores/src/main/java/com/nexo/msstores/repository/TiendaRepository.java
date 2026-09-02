@@ -12,4 +12,6 @@ public interface TiendaRepository extends JpaRepository<Tienda, UUID> {
 
     List<Tienda> findByOwnerId(UUID ownerId);
 
+    List<Tienda> findByEstadoAndCategoria(Tienda.Estado estado, Tienda.CategoriaTienda categoria);
+
 }

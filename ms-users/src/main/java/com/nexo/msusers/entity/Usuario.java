@@ -18,6 +18,9 @@ public class Usuario {
     @Column(nullable = false)
     private String nombre;
 
+    @Column(name = "picture_url")
+    private String pictureUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Rol rol;
@@ -45,6 +48,8 @@ public class Usuario {
     public void setEmail(String email) { this.email = email; }
     public String getNombre() { return nombre; }
     public void setNombre(String nombre) { this.nombre = nombre; }
+    public String getPictureUrl() { return pictureUrl; }
+    public void setPictureUrl(String pictureUrl) { this.pictureUrl = pictureUrl; }
     public Rol getRol() { return rol; }
     public void setRol(Rol rol) { this.rol = rol; }
     public Estado getEstado() { return estado; }

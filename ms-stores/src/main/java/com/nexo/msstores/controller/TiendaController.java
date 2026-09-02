@@ -1,5 +1,6 @@
 package com.nexo.msstores.controller;
 
+import com.nexo.msstores.client.ProductoClient;
 import com.nexo.msstores.dto.RechazoRequestDTO;
 import com.nexo.msstores.dto.TiendaRequestDTO;
 import com.nexo.msstores.dto.TiendaResponseDTO;
@@ -23,19 +24,33 @@ import java.util.stream.Collectors;
 public class TiendaController {
 
     private final TiendaRepository tiendaRepository;
+    private final ProductoClient productoClient;
 
-    public TiendaController(TiendaRepository tiendaRepository) {
+    public TiendaController(TiendaRepository tiendaRepository, ProductoClient productoClient) {
         this.tiendaRepository = tiendaRepository;
+        this.productoClient = productoClient;
     }
 
-    // E1-H1: público, solo tiendas aprobadas — no requiere JWT (se configura en SecurityConfig)
     @GetMapping
     public List<TiendaResponseDTO> listarAprobadas() {
         return tiendaRepository.findByEstado(Tienda.Estado.APPROVED)
                 .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // Público: detalle de una tienda por ID — usado también por ms-products y ms-orders
+    @GetMapping("/por-categoria")
+    public List<TiendaResponseDTO> listarPorCategoria(@RequestParam String categoria) {
+        Tienda.CategoriaTienda cat = Tienda.CategoriaTienda.valueOf(categoria.toUpperCase());
+        return tiendaRepository.findByEstadoAndCategoria(Tienda.Estado.APPROVED, cat)
+                .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    @GetMapping("/todas")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public List<TiendaResponseDTO> listarTodas() {
+        return tiendaRepository.findAll()
+                .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
+    }
+
     @GetMapping("/{id}")
     public TiendaResponseDTO obtenerPorId(@PathVariable UUID id) {
         Tienda tienda = tiendaRepository.findById(id)
@@ -43,7 +58,6 @@ public class TiendaController {
         return TiendaResponseDTO.desde(tienda);
     }
 
-    // E3-H1: cualquier usuario autenticado puede solicitar el registro de una tienda
     @PostMapping
     public ResponseEntity<TiendaResponseDTO> solicitarRegistro(
             @Valid @RequestBody TiendaRequestDTO request,
@@ -61,12 +75,12 @@ public class TiendaController {
         tienda.setLogoUrl(request.logoUrl());
         tienda.setHorario(request.horario());
         tienda.setMontoMinimo(request.montoMinimo());
+        tienda.setCategoria(Tienda.CategoriaTienda.valueOf(request.categoria().toUpperCase()));
 
         Tienda guardada = tiendaRepository.save(tienda);
         return ResponseEntity.status(HttpStatus.CREATED).body(TiendaResponseDTO.desde(guardada));
     }
 
-    // E3-H13: el dueño edita los datos generales de su tienda
     @PutMapping("/{id}")
     public ResponseEntity<TiendaResponseDTO> editar(
             @PathVariable UUID id,
@@ -89,11 +103,13 @@ public class TiendaController {
         tienda.setLogoUrl(request.logoUrl());
         tienda.setHorario(request.horario());
         tienda.setMontoMinimo(request.montoMinimo());
+        if (request.categoria() != null) {
+            tienda.setCategoria(Tienda.CategoriaTienda.valueOf(request.categoria().toUpperCase()));
+        }
 
         return ResponseEntity.ok(TiendaResponseDTO.desde(tiendaRepository.save(tienda)));
     }
 
-    // E4-H2: solo administradores ven las solicitudes pendientes
     @GetMapping("/pendientes")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public List<TiendaResponseDTO> listarPendientes() {
@@ -101,7 +117,6 @@ public class TiendaController {
                 .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // E4-H4: solo administradores aprueban
     @PatchMapping("/{id}/aprobar")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<TiendaResponseDTO> aprobar(@PathVariable UUID id) {
@@ -110,7 +125,6 @@ public class TiendaController {
         return ResponseEntity.ok(TiendaResponseDTO.desde(tiendaRepository.save(tienda)));
     }
 
-    // E4-H5: solo administradores rechazan, con motivo obligatorio
     @PatchMapping("/{id}/rechazar")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<TiendaResponseDTO> rechazar(
@@ -123,7 +137,21 @@ public class TiendaController {
         return ResponseEntity.ok(TiendaResponseDTO.desde(tiendaRepository.save(tienda)));
     }
 
-    // E3-H14: el dueño solo ve/edita su propia tienda
+    // Solo administradores pueden eliminar tiendas — bloqueado si tiene productos asociados
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public ResponseEntity<Void> eliminar(@PathVariable UUID id) {
+        if (!tiendaRepository.existsById(id)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tienda no encontrada");
+        }
+        if (productoClient.tieneProductos(id)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "No se puede eliminar: la tienda tiene productos asociados. Eliminalos primero.");
+        }
+        tiendaRepository.deleteById(id);
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/mi-tienda")
     public List<TiendaResponseDTO> misTiendas(JwtAuthenticationToken auth) {
         UUID ownerId = obtenerUserId(auth);

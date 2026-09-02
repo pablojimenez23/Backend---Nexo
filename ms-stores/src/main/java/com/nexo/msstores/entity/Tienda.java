@@ -13,8 +13,6 @@ public class Tienda {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // No es una relación JPA: ms-stores no comparte base de datos con ms-users.
-    // Es solo el UUID del usuario dueño, validado contra el JWT en el controller.
     @Column(name = "owner_id", nullable = false)
     private UUID ownerId;
 
@@ -40,6 +38,10 @@ public class Tienda {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Estado estado;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private CategoriaTienda categoria;
 
     @Column(name = "motivo_rechazo")
     private String motivoRechazo;
@@ -79,11 +81,17 @@ public class Tienda {
     public void setMontoMinimo(BigDecimal montoMinimo) { this.montoMinimo = montoMinimo; }
     public Estado getEstado() { return estado; }
     public void setEstado(Estado estado) { this.estado = estado; }
+    public CategoriaTienda getCategoria() { return categoria; }
+    public void setCategoria(CategoriaTienda categoria) { this.categoria = categoria; }
     public String getMotivoRechazo() { return motivoRechazo; }
     public void setMotivoRechazo(String motivoRechazo) { this.motivoRechazo = motivoRechazo; }
     public Instant getCreadoEn() { return creadoEn; }
 
     public enum Estado {
         PENDING, APPROVED, REJECTED
+    }
+
+    public enum CategoriaTienda {
+        RESTAURANTE, BOTILLERIA, MERCADO
     }
 }

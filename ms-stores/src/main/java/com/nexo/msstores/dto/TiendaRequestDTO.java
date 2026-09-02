@@ -10,6 +10,7 @@ public record TiendaRequestDTO(
         BigDecimal longitud,
         String logoUrl,
         String horario,
-        BigDecimal montoMinimo
+        BigDecimal montoMinimo,
+        String categoria
 ) {
 }
