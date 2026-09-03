@@ -14,4 +14,6 @@ public interface TiendaRepository extends JpaRepository<Tienda, UUID> {
 
     List<Tienda> findByEstadoAndCategoria(Tienda.Estado estado, Tienda.CategoriaTienda categoria);
 
+    List<Tienda> findByEstadoAndNombreContainingIgnoreCase(Tienda.Estado estado, String nombre);
+
 }

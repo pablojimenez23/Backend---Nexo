@@ -1,6 +1,7 @@
 package com.nexo.msusers.entity;
 
 import jakarta.persistence.*;
+import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -11,8 +12,6 @@ public class Conductor {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // Relación uno a uno: todo conductor es un usuario, pero no todo usuario es conductor.
-    // El dueño de la relación es Conductor, ya que no todos los USUARIOS tienen fila acá.
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "usuario_id", nullable = false, unique = true)
     private Usuario usuario;
@@ -30,13 +29,20 @@ public class Conductor {
     @Column(nullable = false)
     private Estado estado;
 
+    @Column(name = "motivo_rechazo")
+    private String motivoRechazo;
+
+    @Column(name = "creado_en", nullable = false, updatable = false)
+    private Instant creadoEn;
+
     public Conductor() {
     }
 
     @PrePersist
     protected void alCrear() {
+        this.creadoEn = Instant.now();
         if (this.estado == null) {
-            this.estado = Estado.DISPONIBLE;
+            this.estado = Estado.PENDIENTE_APROBACION;
         }
     }
 
@@ -51,8 +57,11 @@ public class Conductor {
     public void setPatente(String patente) { this.patente = patente; }
     public Estado getEstado() { return estado; }
     public void setEstado(Estado estado) { this.estado = estado; }
+    public String getMotivoRechazo() { return motivoRechazo; }
+    public void setMotivoRechazo(String motivoRechazo) { this.motivoRechazo = motivoRechazo; }
+    public Instant getCreadoEn() { return creadoEn; }
 
     public enum Estado {
-        DISPONIBLE, OCUPADO, INACTIVO
+        PENDIENTE_APROBACION, DISPONIBLE, OCUPADO, INACTIVO, RECHAZADO
     }
 }

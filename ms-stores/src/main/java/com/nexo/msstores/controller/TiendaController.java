@@ -1,5 +1,6 @@
 package com.nexo.msstores.controller;
 
+import com.nexo.msstores.client.NotificacionClient;
 import com.nexo.msstores.client.ProductoClient;
 import com.nexo.msstores.dto.RechazoRequestDTO;
 import com.nexo.msstores.dto.TiendaRequestDTO;
@@ -25,10 +26,14 @@ public class TiendaController {
 
     private final TiendaRepository tiendaRepository;
     private final ProductoClient productoClient;
+    private final NotificacionClient notificacionClient;
 
-    public TiendaController(TiendaRepository tiendaRepository, ProductoClient productoClient) {
+    public TiendaController(TiendaRepository tiendaRepository,
+                             ProductoClient productoClient,
+                             NotificacionClient notificacionClient) {
         this.tiendaRepository = tiendaRepository;
         this.productoClient = productoClient;
+        this.notificacionClient = notificacionClient;
     }
 
     @GetMapping
@@ -41,6 +46,13 @@ public class TiendaController {
     public List<TiendaResponseDTO> listarPorCategoria(@RequestParam String categoria) {
         Tienda.CategoriaTienda cat = Tienda.CategoriaTienda.valueOf(categoria.toUpperCase());
         return tiendaRepository.findByEstadoAndCategoria(Tienda.Estado.APPROVED, cat)
+                .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // Búsqueda por nombre — usada desde la barra de búsqueda en Inicio
+    @GetMapping("/buscar")
+    public List<TiendaResponseDTO> buscar(@RequestParam String q) {
+        return tiendaRepository.findByEstadoAndNombreContainingIgnoreCase(Tienda.Estado.APPROVED, q)
                 .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
     }
 
@@ -78,6 +90,10 @@ public class TiendaController {
         tienda.setCategoria(Tienda.CategoriaTienda.valueOf(request.categoria().toUpperCase()));
 
         Tienda guardada = tiendaRepository.save(tienda);
+
+        notificacionClient.enviar(ownerId, "Solicitud de tienda enviada",
+                "Tu solicitud para \"" + tienda.getNombre() + "\" está en revisión. Te avisamos apenas la resolvamos.");
+
         return ResponseEntity.status(HttpStatus.CREATED).body(TiendaResponseDTO.desde(guardada));
     }
 
@@ -122,7 +138,12 @@ public class TiendaController {
     public ResponseEntity<TiendaResponseDTO> aprobar(@PathVariable UUID id) {
         Tienda tienda = obtenerPendiente(id);
         tienda.setEstado(Tienda.Estado.APPROVED);
-        return ResponseEntity.ok(TiendaResponseDTO.desde(tiendaRepository.save(tienda)));
+        Tienda guardada = tiendaRepository.save(tienda);
+
+        notificacionClient.enviar(tienda.getOwnerId(), "¡Tienda aprobada!",
+                "Tu tienda \"" + tienda.getNombre() + "\" ya está visible en NEXO.");
+
+        return ResponseEntity.ok(TiendaResponseDTO.desde(guardada));
     }
 
     @PatchMapping("/{id}/rechazar")
@@ -134,10 +155,14 @@ public class TiendaController {
         Tienda tienda = obtenerPendiente(id);
         tienda.setEstado(Tienda.Estado.REJECTED);
         tienda.setMotivoRechazo(request.motivo());
-        return ResponseEntity.ok(TiendaResponseDTO.desde(tiendaRepository.save(tienda)));
+        Tienda guardada = tiendaRepository.save(tienda);
+
+        notificacionClient.enviar(tienda.getOwnerId(), "Solicitud de tienda rechazada",
+                "Motivo: " + request.motivo());
+
+        return ResponseEntity.ok(TiendaResponseDTO.desde(guardada));
     }
 
-    // Solo administradores pueden eliminar tiendas — bloqueado si tiene productos asociados
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<Void> eliminar(@PathVariable UUID id) {

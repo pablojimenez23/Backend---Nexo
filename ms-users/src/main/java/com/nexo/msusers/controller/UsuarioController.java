@@ -1,5 +1,6 @@
 package com.nexo.msusers.controller;
 
+import com.nexo.msusers.client.CognitoUserInfoClient;
 import com.nexo.msusers.dto.UsuarioResponseDTO;
 import com.nexo.msusers.entity.Usuario;
 import com.nexo.msusers.repository.UsuarioRepository;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -20,25 +22,50 @@ import java.util.stream.Collectors;
 public class UsuarioController {
 
     private final UsuarioRepository usuarioRepository;
+    private final CognitoUserInfoClient userInfoClient;
 
-    public UsuarioController(UsuarioRepository usuarioRepository) {
+    public UsuarioController(UsuarioRepository usuarioRepository, CognitoUserInfoClient userInfoClient) {
         this.usuarioRepository = usuarioRepository;
+        this.userInfoClient = userInfoClient;
     }
 
     @GetMapping("/me")
     public ResponseEntity<UsuarioResponseDTO> obtenerUsuarioActual(JwtAuthenticationToken auth) {
         Jwt jwt = (Jwt) auth.getPrincipal();
+        String sub = jwt.getSubject();
         String email = jwt.getClaimAsString("email");
         String nombre = jwt.getClaimAsString("name");
         String picture = jwt.getClaimAsString("picture");
 
-        Usuario usuario = usuarioRepository.findByEmail(email)
-                .orElseGet(() -> crearNuevoUsuario(email, nombre, picture));
+        if (email == null) {
+            Map<String, Object> userInfo = userInfoClient.obtenerUserInfo(jwt.getTokenValue());
+            email = (String) userInfo.get("email");
+            nombre = (String) userInfo.get("name");
+            picture = (String) userInfo.get("picture");
+        }
+
+        if (email == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "No se pudo obtener el email del usuario autenticado");
+        }
+
+        final String emailFinal = email;
+        final String nombreFinal = nombre;
+        final String pictureFinal = picture;
+
+        Usuario usuario = usuarioRepository.findByEmail(emailFinal)
+                .orElseGet(() -> crearNuevoUsuario(emailFinal, nombreFinal, pictureFinal, sub));
+
+        // Auto-reparación: si el usuario ya existía de antes de agregar este campo,
+        // le completamos el cognitoSub en el primer login después del cambio.
+        if (usuario.getCognitoSub() == null) {
+            usuario.setCognitoSub(sub);
+            usuario = usuarioRepository.save(usuario);
+        }
 
         return ResponseEntity.ok(UsuarioResponseDTO.desde(usuario));
     }
 
-    // Solo ADMIN: listado completo de cuentas registradas
     @GetMapping
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public List<UsuarioResponseDTO> listarTodos() {
@@ -46,8 +73,14 @@ public class UsuarioController {
                 .stream().map(UsuarioResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // Solo ADMIN: elimina el registro local. La cuenta de Google/Cognito no se ve afectada
-    // y el usuario se vuelve a crear automáticamente si inicia sesión de nuevo.
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public UsuarioResponseDTO obtenerPorId(@PathVariable UUID id) {
+        Usuario usuario = usuarioRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado"));
+        return UsuarioResponseDTO.desde(usuario);
+    }
+
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<Void> eliminar(@PathVariable UUID id) {
@@ -58,11 +91,12 @@ public class UsuarioController {
         return ResponseEntity.noContent().build();
     }
 
-    private Usuario crearNuevoUsuario(String email, String nombre, String picture) {
+    private Usuario crearNuevoUsuario(String email, String nombre, String picture, String cognitoSub) {
         Usuario nuevo = new Usuario();
         nuevo.setEmail(email);
         nuevo.setNombre(nombre != null ? nombre : email);
         nuevo.setPictureUrl(picture);
+        nuevo.setCognitoSub(cognitoSub);
         nuevo.setRol(Usuario.Rol.CLIENTE);
         nuevo.setEstado(Usuario.Estado.ACTIVO);
         return usuarioRepository.save(nuevo);

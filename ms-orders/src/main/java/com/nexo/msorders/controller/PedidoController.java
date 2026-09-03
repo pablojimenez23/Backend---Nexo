@@ -1,5 +1,6 @@
 package com.nexo.msorders.controller;
 
+import com.nexo.msorders.client.NotificacionClient;
 import com.nexo.msorders.client.ProductoClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
@@ -40,15 +41,18 @@ public class PedidoController {
     private final ItemPedidoRepository itemPedidoRepository;
     private final TiendaClient tiendaClient;
     private final ProductoClient productoClient;
+    private final NotificacionClient notificacionClient;
 
     public PedidoController(PedidoRepository pedidoRepository,
                              ItemPedidoRepository itemPedidoRepository,
                              TiendaClient tiendaClient,
-                             ProductoClient productoClient) {
+                             ProductoClient productoClient,
+                             NotificacionClient notificacionClient) {
         this.pedidoRepository = pedidoRepository;
         this.itemPedidoRepository = itemPedidoRepository;
         this.tiendaClient = tiendaClient;
         this.productoClient = productoClient;
+        this.notificacionClient = notificacionClient;
     }
 
     // Crea el pedido: valida tienda (horario/monto mínimo) y reserva stock de cada producto
@@ -161,7 +165,10 @@ public class PedidoController {
 
     @PatchMapping("/{id}/listo")
     public PedidoResponseDTO marcarListo(@PathVariable UUID id) {
-        return avanzarEstado(id, Pedido.Estado.PREPARING, Pedido.Estado.READY);
+        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PREPARING, Pedido.Estado.READY);
+        notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
+                "Un conductor lo va a retirar pronto.");
+        return resultado;
     }
 
     // El conductor acepta el pedido — UPDATE condicional, evita doble asignación
@@ -186,7 +193,12 @@ public class PedidoController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No podés marcar este pedido como entregado");
         }
         pedido.setEstado(Pedido.Estado.DELIVERED);
-        return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
+        Pedido guardado = pedidoRepository.save(pedido);
+
+        notificacionClient.enviar(guardado.getClienteId(), "¡Pedido entregado!",
+                "Esperamos que lo disfrutes. Gracias por usar NEXO.");
+
+        return PedidoResponseDTO.desde(guardado);
     }
 
     @GetMapping("/{id}")
@@ -207,6 +219,22 @@ public class PedidoController {
     public List<PedidoResponseDTO> pedidosDeTienda(@RequestParam UUID tiendaId) {
         return pedidoRepository.findByTiendaId(tiendaId)
                 .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // Pedidos READY esperando que un conductor los tome
+    @GetMapping("/disponibles")
+    public List<PedidoResponseDTO> pedidosDisponibles() {
+        return pedidoRepository.findByEstadoAndConductorIdIsNull(Pedido.Estado.READY)
+                .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // El pedido que el conductor tiene asignado y en curso ahora mismo
+    @GetMapping("/mi-entrega")
+    public ResponseEntity<PedidoResponseDTO> miEntregaActual(JwtAuthenticationToken auth) {
+        UUID conductorId = obtenerUserId(auth);
+        return pedidoRepository.findByConductorIdAndEstado(conductorId, Pedido.Estado.DELIVERING)
+                .map(p -> ResponseEntity.ok(PedidoResponseDTO.desde(p)))
+                .orElse(ResponseEntity.noContent().build());
     }
 
     private PedidoResponseDTO avanzarEstado(UUID id, Pedido.Estado desde, Pedido.Estado hacia) {

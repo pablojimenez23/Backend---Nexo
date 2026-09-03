@@ -21,6 +21,11 @@ public class Usuario {
     @Column(name = "picture_url")
     private String pictureUrl;
 
+    // El "sub" de Cognito — identificador estable de la cuenta, el mismo
+    // que ms-stores usa como ownerId y ms-orders como clienteId.
+    @Column(name = "cognito_sub")
+    private String cognitoSub;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Rol rol;
@@ -50,6 +55,8 @@ public class Usuario {
     public void setNombre(String nombre) { this.nombre = nombre; }
     public String getPictureUrl() { return pictureUrl; }
     public void setPictureUrl(String pictureUrl) { this.pictureUrl = pictureUrl; }
+    public String getCognitoSub() { return cognitoSub; }
+    public void setCognitoSub(String cognitoSub) { this.cognitoSub = cognitoSub; }
     public Rol getRol() { return rol; }
     public void setRol(Rol rol) { this.rol = rol; }
     public Estado getEstado() { return estado; }

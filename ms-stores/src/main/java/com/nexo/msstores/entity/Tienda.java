@@ -92,6 +92,6 @@ public class Tienda {
     }
 
     public enum CategoriaTienda {
-        RESTAURANTE, BOTILLERIA, MERCADO
+        RESTAURANTE, BOTILLERIA, MERCADO, CAFETERIA
     }
 }

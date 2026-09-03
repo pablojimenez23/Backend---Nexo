@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface PedidoRepository extends JpaRepository<Pedido, UUID> {
@@ -14,6 +15,12 @@ public interface PedidoRepository extends JpaRepository<Pedido, UUID> {
     List<Pedido> findByClienteId(UUID clienteId);
 
     List<Pedido> findByTiendaId(UUID tiendaId);
+
+    // Pedidos READY esperando que un conductor los tome
+    List<Pedido> findByEstadoAndConductorIdIsNull(Pedido.Estado estado);
+
+    // El pedido que un conductor tiene asignado y en curso ahora mismo
+    Optional<Pedido> findByConductorIdAndEstado(UUID conductorId, Pedido.Estado estado);
 
     /**
      * UPDATE condicional: solo asigna el conductor si el pedido sigue

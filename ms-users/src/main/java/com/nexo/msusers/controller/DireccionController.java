@@ -1,5 +1,6 @@
 package com.nexo.msusers.controller;
 
+import com.nexo.msusers.client.CognitoUserInfoClient;
 import com.nexo.msusers.dto.DireccionRequestDTO;
 import com.nexo.msusers.dto.DireccionResponseDTO;
 import com.nexo.msusers.entity.Direccion;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -23,13 +25,16 @@ public class DireccionController {
 
     private final DireccionRepository direccionRepository;
     private final UsuarioRepository usuarioRepository;
+    private final CognitoUserInfoClient userInfoClient;
 
-    public DireccionController(DireccionRepository direccionRepository, UsuarioRepository usuarioRepository) {
+    public DireccionController(DireccionRepository direccionRepository,
+                                UsuarioRepository usuarioRepository,
+                                CognitoUserInfoClient userInfoClient) {
         this.direccionRepository = direccionRepository;
         this.usuarioRepository = usuarioRepository;
+        this.userInfoClient = userInfoClient;
     }
 
-    // E2-H9: guardar una dirección de envío en la cuenta
     @PostMapping
     public ResponseEntity<DireccionResponseDTO> crear(
             @RequestBody DireccionRequestDTO request, JwtAuthenticationToken auth) {
@@ -50,7 +55,6 @@ public class DireccionController {
         return ResponseEntity.status(HttpStatus.CREATED).body(DireccionResponseDTO.desde(guardada));
     }
 
-    // Listar mis direcciones guardadas
     @GetMapping
     public List<DireccionResponseDTO> misDirecciones(JwtAuthenticationToken auth) {
         Usuario usuario = obtenerUsuarioActual(auth);
@@ -58,7 +62,6 @@ public class DireccionController {
                 .stream().map(DireccionResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // E2-H10: editar una dirección propia
     @PutMapping("/{id}")
     public DireccionResponseDTO editar(
             @PathVariable UUID id, @RequestBody DireccionRequestDTO request, JwtAuthenticationToken auth) {
@@ -76,7 +79,6 @@ public class DireccionController {
         return DireccionResponseDTO.desde(direccionRepository.save(direccion));
     }
 
-    // E2-H10: eliminar una dirección propia
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminar(@PathVariable UUID id, JwtAuthenticationToken auth) {
         Direccion direccion = buscarPropia(id, auth);
@@ -97,7 +99,14 @@ public class DireccionController {
     private Usuario obtenerUsuarioActual(JwtAuthenticationToken auth) {
         Jwt jwt = (Jwt) auth.getPrincipal();
         String email = jwt.getClaimAsString("email");
-        return usuarioRepository.findByEmail(email)
+
+        if (email == null) {
+            Map<String, Object> userInfo = userInfoClient.obtenerUserInfo(jwt.getTokenValue());
+            email = (String) userInfo.get("email");
+        }
+
+        final String emailFinal = email;
+        return usuarioRepository.findByEmail(emailFinal)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado"));
     }
 }
