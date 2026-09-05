@@ -13,14 +13,13 @@ public record ProductoResponseDTO(
         BigDecimal precio,
         Integer stock,
         String imagenUrl,
-        Boolean disponible
+        boolean disponible
 ) {
     public static ProductoResponseDTO desde(Producto p) {
         return new ProductoResponseDTO(
-                p.getId(), p.getTiendaId(),
-                p.getCategoria() != null ? p.getCategoria().getId() : null,
-                p.getNombre(), p.getDescripcion(), p.getPrecio(),
-                p.getStock(), p.getImagenUrl(), p.getDisponible()
+                p.getId(), p.getTiendaId(), p.getCategoriaId(), p.getNombre(),
+                p.getDescripcion(), p.getPrecio(), p.getStock(), p.getImagenUrl(),
+                p.isDisponible()
         );
     }
 }

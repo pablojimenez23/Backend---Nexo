@@ -12,14 +12,11 @@ public class Producto {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // Solo el UUID de la tienda, no una relación JPA — ms-products
-    // no comparte base de datos con ms-stores.
     @Column(name = "tienda_id", nullable = false)
     private UUID tiendaId;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "categoria_id")
-    private Categoria categoria;
+    @Column(name = "categoria_id")
+    private UUID categoriaId;
 
     @Column(nullable = false)
     private String nombre;
@@ -36,26 +33,16 @@ public class Producto {
     private String imagenUrl;
 
     @Column(nullable = false)
-    private Boolean disponible;
+    private boolean disponible = true;
 
     public Producto() {
-    }
-
-    @PrePersist
-    protected void alCrear() {
-        if (this.disponible == null) {
-            this.disponible = true;
-        }
-        if (this.stock == null) {
-            this.stock = 0;
-        }
     }
 
     public UUID getId() { return id; }
     public UUID getTiendaId() { return tiendaId; }
     public void setTiendaId(UUID tiendaId) { this.tiendaId = tiendaId; }
-    public Categoria getCategoria() { return categoria; }
-    public void setCategoria(Categoria categoria) { this.categoria = categoria; }
+    public UUID getCategoriaId() { return categoriaId; }
+    public void setCategoriaId(UUID categoriaId) { this.categoriaId = categoriaId; }
     public String getNombre() { return nombre; }
     public void setNombre(String nombre) { this.nombre = nombre; }
     public String getDescripcion() { return descripcion; }
@@ -66,6 +53,6 @@ public class Producto {
     public void setStock(Integer stock) { this.stock = stock; }
     public String getImagenUrl() { return imagenUrl; }
     public void setImagenUrl(String imagenUrl) { this.imagenUrl = imagenUrl; }
-    public Boolean getDisponible() { return disponible; }
-    public void setDisponible(Boolean disponible) { this.disponible = disponible; }
+    public boolean isDisponible() { return disponible; }
+    public void setDisponible(boolean disponible) { this.disponible = disponible; }
 }

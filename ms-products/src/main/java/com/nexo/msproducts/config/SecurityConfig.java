@@ -21,6 +21,8 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.GET, "/productos/**", "/categorias").permitAll()
+                .requestMatchers(HttpMethod.PATCH, "/productos/*/reservar-stock", "/productos/*/revertir-stock").permitAll()
+                .requestMatchers(HttpMethod.DELETE, "/productos/por-tienda/*").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {}));

@@ -1,5 +1,6 @@
 package com.nexo.msstores.controller;
 
+import com.nexo.msstores.client.PedidoClient;
 import com.nexo.msstores.dto.CalificacionRequestDTO;
 import com.nexo.msstores.dto.CalificacionResponseDTO;
 import com.nexo.msstores.entity.Calificacion;
@@ -24,21 +25,22 @@ public class CalificacionController {
 
     private final CalificacionRepository calificacionRepository;
     private final TiendaRepository tiendaRepository;
+    private final PedidoClient pedidoClient;
 
-    public CalificacionController(CalificacionRepository calificacionRepository, TiendaRepository tiendaRepository) {
+    public CalificacionController(CalificacionRepository calificacionRepository,
+                                   TiendaRepository tiendaRepository,
+                                   PedidoClient pedidoClient) {
         this.calificacionRepository = calificacionRepository;
         this.tiendaRepository = tiendaRepository;
+        this.pedidoClient = pedidoClient;
     }
 
-    // E1-H13 / E3-H12: público, cualquiera puede leer las calificaciones
     @GetMapping
     public List<CalificacionResponseDTO> listar(@PathVariable UUID tiendaId) {
         return calificacionRepository.findByTiendaId(tiendaId)
                 .stream().map(CalificacionResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // E2-H8: calificar una tienda (idealmente solo tras un pedido DELIVERED,
-    // esa validación cruzada con ms-orders queda pendiente para una iteración futura)
     @PostMapping
     public ResponseEntity<CalificacionResponseDTO> calificar(
             @PathVariable UUID tiendaId,
@@ -49,7 +51,13 @@ public class CalificacionController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tienda no encontrada"));
 
         Jwt jwt = (Jwt) auth.getPrincipal();
-        UUID usuarioId = UUID.fromString(jwt.getClaimAsString("sub"));
+        UUID usuarioId = UUID.fromString(jwt.getSubject());
+
+        boolean valido = pedidoClient.pedidoCompletadoValido(request.pedidoId(), usuarioId, tiendaId);
+        if (!valido) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Solo podés calificar tiendas de pedidos que hayas completado");
+        }
 
         Calificacion calificacion = new Calificacion();
         calificacion.setTienda(tienda);

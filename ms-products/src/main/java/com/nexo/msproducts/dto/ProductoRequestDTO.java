@@ -5,11 +5,10 @@ import java.util.UUID;
 
 public record ProductoRequestDTO(
         UUID tiendaId,
-        UUID categoriaId,
         String nombre,
         String descripcion,
         BigDecimal precio,
         Integer stock,
-        String imagenUrl
+        Boolean disponible
 ) {
 }

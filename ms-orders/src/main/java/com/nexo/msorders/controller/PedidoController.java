@@ -12,18 +12,24 @@ import com.nexo.msorders.entity.Pedido;
 import com.nexo.msorders.repository.ItemPedidoRepository;
 import com.nexo.msorders.repository.PedidoRepository;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.LocalTime;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @RestController
@@ -31,17 +37,24 @@ import java.util.stream.Collectors;
 public class PedidoController {
 
     private static final BigDecimal COSTO_ENVIO = new BigDecimal("2000");
+    private static final BigDecimal MARGEN_PLATAFORMA_ENVIO = new BigDecimal("800");
     private static final BigDecimal PORCENTAJE_COMISION = new BigDecimal("0.12");
     private static final BigDecimal PORCENTAJE_CARGO_CANCELACION = new BigDecimal("0.20");
 
     private static final Set<Pedido.Estado> CANCELABLES_SIN_CARGO =
-            EnumSet.of(Pedido.Estado.CREATED, Pedido.Estado.PAID, Pedido.Estado.CONFIRMED);
+            EnumSet.of(Pedido.Estado.CREATED, Pedido.Estado.PAID);
+
+    private static final Pattern PATRON_HORARIO =
+            Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
 
     private final PedidoRepository pedidoRepository;
     private final ItemPedidoRepository itemPedidoRepository;
     private final TiendaClient tiendaClient;
     private final ProductoClient productoClient;
     private final NotificacionClient notificacionClient;
+
+    @Value("${internal.api.key}")
+    private String internalApiKey;
 
     public PedidoController(PedidoRepository pedidoRepository,
                              ItemPedidoRepository itemPedidoRepository,
@@ -55,7 +68,6 @@ public class PedidoController {
         this.notificacionClient = notificacionClient;
     }
 
-    // Crea el pedido: valida tienda (horario/monto mínimo) y reserva stock de cada producto
     @PostMapping
     public ResponseEntity<PedidoResponseDTO> crear(
             @RequestBody CrearPedidoRequestDTO request,
@@ -63,6 +75,11 @@ public class PedidoController {
 
         UUID clienteId = obtenerUserId(auth);
         var tienda = tiendaClient.obtenerTienda(request.tiendaId());
+
+        if (!tiendaEstaAbierta(tienda.horario())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La tienda se encuentra cerrada en este momento");
+        }
 
         BigDecimal subtotal = BigDecimal.ZERO;
         List<ItemPedido> items = new java.util.ArrayList<>();
@@ -100,6 +117,7 @@ public class PedidoController {
         pedido.setSubtotal(subtotal);
         pedido.setCostoEnvio(COSTO_ENVIO);
         pedido.setComisionPlataforma(comision);
+        pedido.setGananciaConductor(COSTO_ENVIO.subtract(MARGEN_PLATAFORMA_ENVIO));
         pedido.setTotal(total);
         pedido.setPago(pago);
 
@@ -110,7 +128,6 @@ public class PedidoController {
         return ResponseEntity.status(HttpStatus.CREATED).body(PedidoResponseDTO.desde(guardado));
     }
 
-    // Pago simulado: siempre aprueba (es simulado). CREATED -> PAID
     @PostMapping("/{id}/pagar")
     public PedidoResponseDTO pagar(@PathVariable UUID id, JwtAuthenticationToken auth) {
         Pedido pedido = buscarPropio(id, auth);
@@ -122,7 +139,6 @@ public class PedidoController {
         return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
     }
 
-    // Cancelación con la regla de reembolso según el estado actual
     @PatchMapping("/{id}/cancelar")
     public PedidoResponseDTO cancelar(
             @PathVariable UUID id,
@@ -133,7 +149,7 @@ public class PedidoController {
 
         if (CANCELABLES_SIN_CARGO.contains(pedido.getEstado())) {
             pedido.getPago().setMontoReembolsado(pedido.getTotal());
-        } else if (pedido.getEstado() == Pedido.Estado.PREPARING) {
+        } else if (pedido.getEstado() == Pedido.Estado.READY) {
             BigDecimal cargo = pedido.getSubtotal().multiply(PORCENTAJE_CARGO_CANCELACION);
             pedido.setCargoCancelacion(cargo);
             pedido.getPago().setMontoReembolsado(pedido.getTotal().subtract(cargo));
@@ -152,27 +168,16 @@ public class PedidoController {
         return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
     }
 
-    // Avance del flujo de la tienda: CONFIRMED, PREPARING, READY
-    @PatchMapping("/{id}/confirmar")
-    public PedidoResponseDTO confirmar(@PathVariable UUID id) {
-        return avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.CONFIRMED);
-    }
-
-    @PatchMapping("/{id}/preparar")
-    public PedidoResponseDTO preparar(@PathVariable UUID id) {
-        return avanzarEstado(id, Pedido.Estado.CONFIRMED, Pedido.Estado.PREPARING);
-    }
-
     @PatchMapping("/{id}/listo")
     public PedidoResponseDTO marcarListo(@PathVariable UUID id) {
-        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PREPARING, Pedido.Estado.READY);
+        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.READY);
         notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
                 "Un conductor lo va a retirar pronto.");
         return resultado;
     }
 
-    // El conductor acepta el pedido — UPDATE condicional, evita doble asignación
     @PatchMapping("/{id}/aceptar")
+    @Transactional
     public PedidoResponseDTO aceptar(@PathVariable UUID id, JwtAuthenticationToken auth) {
         UUID conductorId = obtenerUserId(auth);
         int filas = pedidoRepository.asignarConductor(id, conductorId);
@@ -182,7 +187,6 @@ public class PedidoController {
         return PedidoResponseDTO.desde(pedidoRepository.findById(id).orElseThrow());
     }
 
-    // Solo el conductor asignado puede marcar la entrega
     @PatchMapping("/{id}/entregado")
     public PedidoResponseDTO entregar(@PathVariable UUID id, JwtAuthenticationToken auth) {
         UUID conductorId = obtenerUserId(auth);
@@ -196,9 +200,20 @@ public class PedidoController {
         Pedido guardado = pedidoRepository.save(pedido);
 
         notificacionClient.enviar(guardado.getClienteId(), "¡Pedido entregado!",
-                "Esperamos que lo disfrutes. Gracias por usar NEXO.");
+                "Confirmá en la app que lo recibiste correctamente.");
 
         return PedidoResponseDTO.desde(guardado);
+    }
+
+    @PatchMapping("/{id}/confirmar-recepcion")
+    public PedidoResponseDTO confirmarRecepcion(@PathVariable UUID id, JwtAuthenticationToken auth) {
+        Pedido pedido = buscarPropio(id, auth);
+        if (pedido.getEstado() != Pedido.Estado.DELIVERED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Solo podés confirmar la recepción de un pedido ya entregado");
+        }
+        pedido.setEstado(Pedido.Estado.COMPLETED);
+        return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
     }
 
     @GetMapping("/{id}")
@@ -206,7 +221,6 @@ public class PedidoController {
         return PedidoResponseDTO.desde(buscarPropio(id, auth));
     }
 
-    // E2-H7: el cliente ve su propio historial de pedidos
     @GetMapping("/mios")
     public List<PedidoResponseDTO> misPedidos(JwtAuthenticationToken auth) {
         UUID clienteId = obtenerUserId(auth);
@@ -214,27 +228,60 @@ public class PedidoController {
                 .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // E3-H9: la tienda ve los pedidos que recibió
     @GetMapping("/tienda")
     public List<PedidoResponseDTO> pedidosDeTienda(@RequestParam UUID tiendaId) {
         return pedidoRepository.findByTiendaId(tiendaId)
                 .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // Pedidos READY esperando que un conductor los tome
+    @GetMapping("/tienda/completados")
+    public List<PedidoResponseDTO> pedidosCompletadosDeTienda(@RequestParam UUID tiendaId) {
+        return pedidoRepository.findByTiendaIdAndEstado(tiendaId, Pedido.Estado.COMPLETED)
+                .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
+    }
+
     @GetMapping("/disponibles")
     public List<PedidoResponseDTO> pedidosDisponibles() {
         return pedidoRepository.findByEstadoAndConductorIdIsNull(Pedido.Estado.READY)
                 .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // El pedido que el conductor tiene asignado y en curso ahora mismo
     @GetMapping("/mi-entrega")
     public ResponseEntity<PedidoResponseDTO> miEntregaActual(JwtAuthenticationToken auth) {
         UUID conductorId = obtenerUserId(auth);
         return pedidoRepository.findByConductorIdAndEstado(conductorId, Pedido.Estado.DELIVERING)
                 .map(p -> ResponseEntity.ok(PedidoResponseDTO.desde(p)))
                 .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping("/mis-entregas")
+    public List<PedidoResponseDTO> misEntregas(JwtAuthenticationToken auth) {
+        UUID conductorId = obtenerUserId(auth);
+        return pedidoRepository.findByConductorIdAndEstadoIn(
+                conductorId, List.of(Pedido.Estado.DELIVERED, Pedido.Estado.COMPLETED))
+                .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // Uso interno: confirma que el pedido existe, pertenece al cliente indicado,
+    // corresponde a la tienda indicada (si se pasa), y está en estado COMPLETED.
+    @GetMapping("/{id}/verificar-completado")
+    public Map<String, Boolean> verificarCompletado(
+            @PathVariable UUID id,
+            @RequestParam UUID clienteId,
+            @RequestParam(required = false) UUID tiendaId,
+            @RequestHeader(value = "X-Internal-Key", required = false) String key) {
+
+        if (key == null || !key.equals(internalApiKey)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Acceso restringido a servicios internos");
+        }
+
+        boolean valido = pedidoRepository.findById(id)
+                .filter(p -> p.getClienteId().equals(clienteId))
+                .filter(p -> p.getEstado() == Pedido.Estado.COMPLETED)
+                .filter(p -> tiendaId == null || p.getTiendaId().equals(tiendaId))
+                .isPresent();
+
+        return Map.of("valido", valido);
     }
 
     private PedidoResponseDTO avanzarEstado(UUID id, Pedido.Estado desde, Pedido.Estado hacia) {
@@ -256,6 +303,26 @@ public class PedidoController {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No tenés acceso a este pedido");
         }
         return pedido;
+    }
+
+    private boolean tiendaEstaAbierta(String horario) {
+        if (horario == null || horario.isBlank()) {
+            return true;
+        }
+
+        Matcher m = PATRON_HORARIO.matcher(horario.trim());
+        if (!m.matches()) {
+            return true;
+        }
+
+        LocalTime inicio = LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
+        LocalTime fin = LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
+        LocalTime ahora = LocalTime.now();
+
+        if (fin.isAfter(inicio)) {
+            return !ahora.isBefore(inicio) && ahora.isBefore(fin);
+        }
+        return !ahora.isBefore(inicio) || ahora.isBefore(fin);
     }
 
     private UUID obtenerUserId(JwtAuthenticationToken auth) {

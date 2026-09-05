@@ -73,6 +73,15 @@ public class NotificacionController {
         return ResponseEntity.noContent().build();
     }
 
+    // Borra todas las notificaciones del usuario autenticado
+    @DeleteMapping
+    public ResponseEntity<Void> eliminarTodas(JwtAuthenticationToken auth) {
+        UUID usuarioId = obtenerSub(auth);
+        List<Notificacion> notificaciones = notificacionRepository.findByUsuarioIdOrderByCreadoEnDesc(usuarioId);
+        notificacionRepository.deleteAll(notificaciones);
+        return ResponseEntity.noContent().build();
+    }
+
     @PostMapping("/internal")
     public ResponseEntity<Void> crearInterna(
             @RequestBody CrearNotificacionRequestDTO request,

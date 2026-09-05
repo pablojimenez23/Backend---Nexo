@@ -16,18 +16,16 @@ public interface PedidoRepository extends JpaRepository<Pedido, UUID> {
 
     List<Pedido> findByTiendaId(UUID tiendaId);
 
-    // Pedidos READY esperando que un conductor los tome
     List<Pedido> findByEstadoAndConductorIdIsNull(Pedido.Estado estado);
 
-    // El pedido que un conductor tiene asignado y en curso ahora mismo
     Optional<Pedido> findByConductorIdAndEstado(UUID conductorId, Pedido.Estado estado);
 
-    /**
-     * UPDATE condicional: solo asigna el conductor si el pedido sigue
-     * en READY y sin conductor asignado. Evita que dos conductores
-     * tomen el mismo pedido al mismo tiempo.
-     * Devuelve cuántas filas se modificaron (0 = ya lo tomó otro).
-     */
+    // Historial de entregas del conductor (entregadas o ya completadas)
+    List<Pedido> findByConductorIdAndEstadoIn(UUID conductorId, List<Pedido.Estado> estados);
+
+    // Pedidos completados de una tienda, para calcular estadísticas de ventas
+    List<Pedido> findByTiendaIdAndEstado(UUID tiendaId, Pedido.Estado estado);
+
     @Modifying
     @Query("UPDATE Pedido p SET p.conductorId = :conductorId, p.estado = 'DELIVERING' " +
            "WHERE p.id = :id AND p.conductorId IS NULL AND p.estado = 'READY'")

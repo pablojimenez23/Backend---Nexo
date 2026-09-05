@@ -56,14 +56,36 @@ public class UsuarioController {
         Usuario usuario = usuarioRepository.findByEmail(emailFinal)
                 .orElseGet(() -> crearNuevoUsuario(emailFinal, nombreFinal, pictureFinal, sub));
 
-        // Auto-reparación: si el usuario ya existía de antes de agregar este campo,
-        // le completamos el cognitoSub en el primer login después del cambio.
         if (usuario.getCognitoSub() == null) {
             usuario.setCognitoSub(sub);
             usuario = usuarioRepository.save(usuario);
         }
 
         return ResponseEntity.ok(UsuarioResponseDTO.desde(usuario));
+    }
+
+    // El cliente puede editar su propio nombre. La foto viene de Google y no es editable acá.
+    @PutMapping("/me")
+    public ResponseEntity<UsuarioResponseDTO> actualizarPerfil(
+            @RequestBody Map<String, String> request, JwtAuthenticationToken auth) {
+
+        Jwt jwt = (Jwt) auth.getPrincipal();
+        String email = jwt.getClaimAsString("email");
+        if (email == null) {
+            Map<String, Object> userInfo = userInfoClient.obtenerUserInfo(jwt.getTokenValue());
+            email = (String) userInfo.get("email");
+        }
+
+        final String emailFinal = email;
+        Usuario usuario = usuarioRepository.findByEmail(emailFinal)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado"));
+
+        String nuevoNombre = request.get("nombre");
+        if (nuevoNombre != null && !nuevoNombre.isBlank()) {
+            usuario.setNombre(nuevoNombre.trim());
+        }
+
+        return ResponseEntity.ok(UsuarioResponseDTO.desde(usuarioRepository.save(usuario)));
     }
 
     @GetMapping

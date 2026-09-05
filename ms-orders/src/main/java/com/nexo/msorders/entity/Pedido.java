@@ -42,6 +42,9 @@ public class Pedido {
     @Column(name = "comision_plataforma", nullable = false)
     private BigDecimal comisionPlataforma;
 
+    @Column(name = "ganancia_conductor")
+    private BigDecimal gananciaConductor;
+
     @Column(nullable = false)
     private BigDecimal total;
 
@@ -84,6 +87,8 @@ public class Pedido {
     public void setCostoEnvio(BigDecimal costoEnvio) { this.costoEnvio = costoEnvio; }
     public BigDecimal getComisionPlataforma() { return comisionPlataforma; }
     public void setComisionPlataforma(BigDecimal comisionPlataforma) { this.comisionPlataforma = comisionPlataforma; }
+    public BigDecimal getGananciaConductor() { return gananciaConductor; }
+    public void setGananciaConductor(BigDecimal gananciaConductor) { this.gananciaConductor = gananciaConductor; }
     public BigDecimal getTotal() { return total; }
     public void setTotal(BigDecimal total) { this.total = total; }
     public BigDecimal getCargoCancelacion() { return cargoCancelacion; }
@@ -93,6 +98,6 @@ public class Pedido {
     public Instant getCreadoEn() { return creadoEn; }
 
     public enum Estado {
-        CREATED, PAID, CONFIRMED, PREPARING, READY, DELIVERING, DELIVERED, CANCELLED
+        CREATED, PAID, CONFIRMED, PREPARING, READY, DELIVERING, DELIVERED, COMPLETED, CANCELLED
     }
 }

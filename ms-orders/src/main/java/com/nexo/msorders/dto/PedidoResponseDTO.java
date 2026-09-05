@@ -14,6 +14,7 @@ public record PedidoResponseDTO(
         BigDecimal subtotal,
         BigDecimal costoEnvio,
         BigDecimal comisionPlataforma,
+        BigDecimal gananciaConductor,
         BigDecimal total,
         BigDecimal cargoCancelacion,
         String motivoCancelacion
@@ -22,7 +23,8 @@ public record PedidoResponseDTO(
         return new PedidoResponseDTO(
                 p.getId(), p.getClienteId(), p.getTiendaId(), p.getConductorId(),
                 p.getDireccionEnvio(), p.getEstado().name(), p.getSubtotal(), p.getCostoEnvio(),
-                p.getComisionPlataforma(), p.getTotal(), p.getCargoCancelacion(), p.getMotivoCancelacion()
+                p.getComisionPlataforma(), p.getGananciaConductor(), p.getTotal(),
+                p.getCargoCancelacion(), p.getMotivoCancelacion()
         );
     }
 }
