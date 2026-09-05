@@ -136,7 +136,12 @@ public class PedidoController {
         }
         pedido.getPago().setEstado(PagoSimulado.Estado.APPROVED);
         pedido.setEstado(Pedido.Estado.PAID);
-        return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
+        Pedido guardado = pedidoRepository.save(pedido);
+
+        notificacionClient.enviar(guardado.getClienteId(), "¡Pago confirmado!",
+                "Tu pedido fue pagado con éxito. La tienda lo va a preparar pronto.");
+
+        return PedidoResponseDTO.desde(guardado);
     }
 
     @PatchMapping("/{id}/cancelar")
@@ -168,9 +173,19 @@ public class PedidoController {
         return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
     }
 
+    // Paso 1 de la tienda: toma la orden apenas se pagó
+    @PatchMapping("/{id}/tomar-orden")
+    public PedidoResponseDTO tomarOrden(@PathVariable UUID id) {
+        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.CONFIRMED);
+        notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido fue tomado!",
+                "La tienda ya lo está preparando.");
+        return resultado;
+    }
+
+    // Paso 2 de la tienda: ya está listo para que un conductor lo retire
     @PatchMapping("/{id}/listo")
     public PedidoResponseDTO marcarListo(@PathVariable UUID id) {
-        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.READY);
+        PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.CONFIRMED, Pedido.Estado.READY);
         notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
                 "Un conductor lo va a retirar pronto.");
         return resultado;
@@ -262,8 +277,6 @@ public class PedidoController {
                 .stream().map(PedidoResponseDTO::desde).collect(Collectors.toList());
     }
 
-    // Uso interno: confirma que el pedido existe, pertenece al cliente indicado,
-    // corresponde a la tienda indicada (si se pasa), y está en estado COMPLETED.
     @GetMapping("/{id}/verificar-completado")
     public Map<String, Boolean> verificarCompletado(
             @PathVariable UUID id,
