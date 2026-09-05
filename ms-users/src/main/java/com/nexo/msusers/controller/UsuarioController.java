@@ -64,7 +64,6 @@ public class UsuarioController {
         return ResponseEntity.ok(UsuarioResponseDTO.desde(usuario));
     }
 
-    // El cliente puede editar su propio nombre. La foto viene de Google y no es editable acá.
     @PutMapping("/me")
     public ResponseEntity<UsuarioResponseDTO> actualizarPerfil(
             @RequestBody Map<String, String> request, JwtAuthenticationToken auth) {
@@ -101,6 +100,29 @@ public class UsuarioController {
         Usuario usuario = usuarioRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado"));
         return UsuarioResponseDTO.desde(usuario);
+    }
+
+    // Cambia el rol de un usuario (CLIENTE, TIENDA, CONDUCTOR, ADMIN). Solo accesible por administradores.
+    @PatchMapping("/{id}/rol")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public ResponseEntity<UsuarioResponseDTO> cambiarRol(
+            @PathVariable UUID id, @RequestBody Map<String, String> request) {
+
+        Usuario usuario = usuarioRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado"));
+
+        String nuevoRol = request.get("rol");
+        if (nuevoRol == null || nuevoRol.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Debés indicar el nuevo rol");
+        }
+
+        try {
+            usuario.setRol(Usuario.Rol.valueOf(nuevoRol.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Rol inválido: " + nuevoRol);
+        }
+
+        return ResponseEntity.ok(UsuarioResponseDTO.desde(usuarioRepository.save(usuario)));
     }
 
     @DeleteMapping("/{id}")

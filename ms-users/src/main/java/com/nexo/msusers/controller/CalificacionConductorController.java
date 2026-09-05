@@ -12,6 +12,7 @@ import com.nexo.msusers.repository.UsuarioRepository;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
@@ -43,6 +44,14 @@ public class CalificacionConductorController {
     @GetMapping("/{conductorId}/calificaciones")
     public List<CalificacionConductorResponseDTO> listar(@PathVariable UUID conductorId) {
         return calificacionRepository.findByConductorId(conductorId)
+                .stream().map(CalificacionConductorResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // Listado global para el panel de admin
+    @GetMapping("/calificaciones/todas")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public List<CalificacionConductorResponseDTO> listarTodas() {
+        return calificacionRepository.findAll()
                 .stream().map(CalificacionConductorResponseDTO::desde).collect(Collectors.toList());
     }
 
