@@ -1,5 +1,6 @@
 package com.nexo.msorders.controller;
 
+import com.nexo.msorders.client.ConductorClient;
 import com.nexo.msorders.client.NotificacionClient;
 import com.nexo.msorders.client.ProductoClient;
 import com.nexo.msorders.client.TiendaClient;
@@ -52,6 +53,7 @@ public class PedidoController {
     private final TiendaClient tiendaClient;
     private final ProductoClient productoClient;
     private final NotificacionClient notificacionClient;
+    private final ConductorClient conductorClient;
 
     @Value("${internal.api.key}")
     private String internalApiKey;
@@ -60,12 +62,14 @@ public class PedidoController {
                              ItemPedidoRepository itemPedidoRepository,
                              TiendaClient tiendaClient,
                              ProductoClient productoClient,
-                             NotificacionClient notificacionClient) {
+                             NotificacionClient notificacionClient,
+                             ConductorClient conductorClient) {
         this.pedidoRepository = pedidoRepository;
         this.itemPedidoRepository = itemPedidoRepository;
         this.tiendaClient = tiendaClient;
         this.productoClient = productoClient;
         this.notificacionClient = notificacionClient;
+        this.conductorClient = conductorClient;
     }
 
     @PostMapping
@@ -141,6 +145,14 @@ public class PedidoController {
         notificacionClient.enviar(guardado.getClienteId(), "¡Pago confirmado!",
                 "Tu pedido fue pagado con éxito. La tienda lo va a preparar pronto.");
 
+        try {
+            var tienda = tiendaClient.obtenerTienda(guardado.getTiendaId());
+            notificacionClient.enviar(tienda.ownerId(), "¡Nuevo pedido recibido!",
+                    "Tenés un pedido pagado esperando ser tomado.");
+        } catch (Exception e) {
+            // Si falla el aviso a la tienda, no bloqueamos el pago del cliente
+        }
+
         return PedidoResponseDTO.desde(guardado);
     }
 
@@ -170,10 +182,16 @@ public class PedidoController {
         pedido.setEstado(Pedido.Estado.CANCELLED);
         pedido.setMotivoCancelacion(request.motivo());
 
-        return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
+        Pedido guardado = pedidoRepository.save(pedido);
+
+        if (guardado.getConductorId() != null) {
+            notificacionClient.enviar(guardado.getConductorId(), "Pedido cancelado",
+                    "El pedido que ibas a retirar fue cancelado por el cliente.");
+        }
+
+        return PedidoResponseDTO.desde(guardado);
     }
 
-    // Paso 1 de la tienda: toma la orden apenas se pagó
     @PatchMapping("/{id}/tomar-orden")
     public PedidoResponseDTO tomarOrden(@PathVariable UUID id) {
         PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.CONFIRMED);
@@ -182,12 +200,18 @@ public class PedidoController {
         return resultado;
     }
 
-    // Paso 2 de la tienda: ya está listo para que un conductor lo retire
     @PatchMapping("/{id}/listo")
     public PedidoResponseDTO marcarListo(@PathVariable UUID id) {
         PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.CONFIRMED, Pedido.Estado.READY);
         notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
                 "Un conductor lo va a retirar pronto.");
+
+        // Avisamos a todos los conductores disponibles que hay un pedido nuevo esperando
+        conductorClient.obtenerConductoresDisponibles().forEach(conductorSub ->
+                notificacionClient.enviar(UUID.fromString(conductorSub), "¡Nuevo pedido disponible!",
+                        "Hay un pedido esperando ser retirado cerca tuyo.")
+        );
+
         return resultado;
     }
 
@@ -199,7 +223,18 @@ public class PedidoController {
         if (filas == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "El pedido ya fue tomado por otro conductor");
         }
-        return PedidoResponseDTO.desde(pedidoRepository.findById(id).orElseThrow());
+
+        Pedido pedido = pedidoRepository.findById(id).orElseThrow();
+
+        try {
+            var tienda = tiendaClient.obtenerTienda(pedido.getTiendaId());
+            notificacionClient.enviar(tienda.ownerId(), "Un conductor viene en camino",
+                    "Ya asignamos un conductor para retirar el pedido.");
+        } catch (Exception e) {
+            // No bloqueamos la aceptación del conductor si falla este aviso
+        }
+
+        return PedidoResponseDTO.desde(pedido);
     }
 
     @PatchMapping("/{id}/entregado")

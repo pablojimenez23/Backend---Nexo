@@ -11,6 +11,7 @@ import com.nexo.msusers.repository.ConductorRepository;
 import com.nexo.msusers.repository.NotificacionRepository;
 import com.nexo.msusers.repository.UsuarioRepository;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -32,6 +33,9 @@ public class ConductorController {
     private final UsuarioRepository usuarioRepository;
     private final CognitoUserInfoClient userInfoClient;
     private final NotificacionRepository notificacionRepository;
+
+    @Value("${internal.api.key}")
+    private String internalApiKey;
 
     public ConductorController(ConductorRepository conductorRepository,
                                 UsuarioRepository usuarioRepository,
@@ -108,6 +112,20 @@ public class ConductorController {
     public List<ConductorResponseDTO> listarTodos() {
         return conductorRepository.findAll()
                 .stream().map(ConductorResponseDTO::desde).collect(Collectors.toList());
+    }
+
+    // Uso interno: devuelve los cognitoSub de los conductores disponibles,
+    // para que ms-orders les avise cuando hay un pedido nuevo listo para retirar.
+    @GetMapping("/internal/disponibles")
+    public List<String> listarDisponiblesInterno(@RequestHeader(value = "X-Internal-Key", required = false) String key) {
+        if (key == null || !key.equals(internalApiKey)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Acceso restringido a servicios internos");
+        }
+        return conductorRepository.findByEstado(Conductor.Estado.DISPONIBLE)
+                .stream()
+                .map(c -> c.getUsuario().getCognitoSub())
+                .filter(sub -> sub != null)
+                .collect(Collectors.toList());
     }
 
     @PatchMapping("/{id}/aprobar")
