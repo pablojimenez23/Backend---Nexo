@@ -20,6 +20,7 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/productos/**", "/categorias").permitAll()
                 .requestMatchers(HttpMethod.PATCH, "/productos/*/reservar-stock", "/productos/*/revertir-stock").permitAll()
                 .requestMatchers(HttpMethod.DELETE, "/productos/por-tienda/*").permitAll()
