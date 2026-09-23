@@ -37,14 +37,23 @@ public class UsuarioController {
         String nombre = jwt.getClaimAsString("name");
         String picture = jwt.getClaimAsString("picture");
 
+        System.out.println("DEBUG === /usuarios/me ===");
+        System.out.println("DEBUG JWT claims completos: " + jwt.getClaims());
+        System.out.println("DEBUG email del JWT: " + email);
+        System.out.println("DEBUG nombre del JWT: " + nombre);
+        System.out.println("DEBUG picture del JWT: " + picture);
+
         // Si falta cualquiera de los 3 (no solo el email), consultamos el endpoint userInfo de Cognito.
         // El Access Token normalmente no trae "name"/"picture", solo el ID Token los incluye.
         if (email == null || nombre == null || picture == null) {
             Map<String, Object> userInfo = userInfoClient.obtenerUserInfo(jwt.getTokenValue());
+            System.out.println("DEBUG userInfo completo desde Cognito: " + userInfo);
             if (email == null) email = (String) userInfo.get("email");
             if (nombre == null) nombre = (String) userInfo.get("name");
             if (picture == null) picture = (String) userInfo.get("picture");
         }
+
+        System.out.println("DEBUG valores finales -> email: " + email + ", nombre: " + nombre + ", picture: " + picture);
 
         if (email == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -137,8 +146,6 @@ public class UsuarioController {
         return ResponseEntity.noContent().build();
     }
 
-    // Actualiza los datos de un usuario existente si detectamos que el nombre/foto quedaron vacíos
-    // (por ejemplo, usuarios creados antes de este fix, o con el email como nombre).
     private Usuario crearNuevoUsuario(String email, String nombre, String picture, String cognitoSub) {
         Usuario nuevo = new Usuario();
         nuevo.setEmail(email);
