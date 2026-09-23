@@ -13,9 +13,7 @@ public class TiendaClient {
     private final RestClient restClient;
 
     public TiendaClient() {
-        // URL fija a ms-stores en local. En despliegue real pasa a ser
-        // una variable de entorno, no queda hardcodeada.
-        this.restClient = RestClient.create("http://localhost:8082");
+        this.restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/stores");
     }
 
     public UUID obtenerOwnerId(UUID tiendaId) {

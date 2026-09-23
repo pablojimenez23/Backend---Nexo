@@ -9,7 +9,7 @@ import java.util.UUID;
 @Component
 public class ProductoClient {
 
-    private final RestClient restClient = RestClient.create("http://localhost:8083");
+    private final RestClient restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/products");
 
     public boolean tieneProductos(UUID tiendaId) {
         try {

@@ -10,7 +10,7 @@ import java.util.UUID;
 @Component
 public class PedidoClient {
 
-    private final RestClient restClient = RestClient.create("http://localhost:8084");
+    private final RestClient restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/orders");
 
     @Value("${internal.api.key}")
     private String internalApiKey;

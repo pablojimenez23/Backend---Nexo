@@ -10,7 +10,7 @@ import java.util.UUID;
 @Component
 public class NotificacionClient {
 
-    private final RestClient restClient = RestClient.create("http://localhost:8081");
+    private final RestClient restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com");
 
     @Value("${internal.api.key}")
     private String internalApiKey;
