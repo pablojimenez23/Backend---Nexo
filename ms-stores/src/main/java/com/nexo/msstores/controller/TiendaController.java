@@ -180,8 +180,9 @@ public class TiendaController {
     @GetMapping("/mi-tienda")
     public List<TiendaResponseDTO> misTiendas(JwtAuthenticationToken auth) {
         UUID ownerId = obtenerUserId(auth);
-        return tiendaRepository.findByOwnerId(ownerId)
-                .stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
+        List<Tienda> tiendas = tiendaRepository.findByOwnerId(ownerId);
+        System.out.println("DEBUG /mi-tienda - ownerId: " + ownerId + " - encontradas: " + tiendas.size());
+        return tiendas.stream().map(TiendaResponseDTO::desde).collect(Collectors.toList());
     }
 
     private Tienda obtenerPendiente(UUID id) {
