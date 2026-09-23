@@ -14,7 +14,11 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminInitia
 import software.amazon.awssdk.services.cognitoidentityprovider.model.AdminInitiateAuthResponse;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.AuthFlowType;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.CognitoIdentityProviderException;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.ListUsersRequest;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.ListUsersResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.UserType;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -38,12 +42,14 @@ public class AdminLoginController {
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@RequestBody LoginRequest request) {
         try {
+            String username = resolverUsername(request.email());
+
             AdminInitiateAuthRequest authRequest = AdminInitiateAuthRequest.builder()
                     .authFlow(AuthFlowType.ADMIN_USER_PASSWORD_AUTH)
                     .userPoolId(userPoolId)
                     .clientId(clientId)
                     .authParameters(Map.of(
-                            "USERNAME", request.email(),
+                            "USERNAME", username,
                             "PASSWORD", request.password()
                     ))
                     .build();
@@ -61,5 +67,28 @@ public class AdminLoginController {
         } catch (CognitoIdentityProviderException e) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email o contraseña incorrectos");
         }
+    }
+
+    /**
+     * El "username" real en Cognito puede no coincidir con el email:
+     * - Usuarios creados manualmente (admin create-user): username = email
+     * - Usuarios via proveedor externo (Google): username = "google_<id>"
+     * Este método busca el usuario por email y devuelve su username real de Cognito.
+     */
+    private String resolverUsername(String email) {
+        ListUsersRequest listRequest = ListUsersRequest.builder()
+                .userPoolId(userPoolId)
+                .filter("email = \"" + email + "\"")
+                .limit(1)
+                .build();
+
+        ListUsersResponse listResponse = cognitoClient.listUsers(listRequest);
+        List<UserType> usuarios = listResponse.users();
+
+        if (usuarios.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email o contraseña incorrectos");
+        }
+
+        return usuarios.get(0).username();
     }
 }
