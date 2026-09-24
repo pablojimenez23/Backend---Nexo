@@ -24,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +48,8 @@ public class PedidoController {
 
     private static final Pattern PATRON_HORARIO =
             Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
+
+    private static final ZoneId ZONA_CHILE = ZoneId.of("America/Santiago");
 
     private final PedidoRepository pedidoRepository;
     private final ItemPedidoRepository itemPedidoRepository;
@@ -206,7 +209,6 @@ public class PedidoController {
         notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
                 "Un conductor lo va a retirar pronto.");
 
-        // Avisamos a todos los conductores disponibles que hay un pedido nuevo esperando
         conductorClient.obtenerConductoresDisponibles().forEach(conductorSub ->
                 notificacionClient.enviar(UUID.fromString(conductorSub), "¡Nuevo pedido disponible!",
                         "Hay un pedido esperando ser retirado cerca tuyo.")
@@ -365,7 +367,7 @@ public class PedidoController {
 
         LocalTime inicio = LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
         LocalTime fin = LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
-        LocalTime ahora = LocalTime.now();
+        LocalTime ahora = LocalTime.now(ZONA_CHILE);
 
         if (fin.isAfter(inicio)) {
             return !ahora.isBefore(inicio) && ahora.isBefore(fin);
