@@ -32,19 +32,18 @@ public class ProductoClient {
 
     public void reservarStock(UUID productoId, int cantidad) {
         try {
-            restClient.post()
+            restClient.patch()
                     .uri("/productos/{id}/reservar-stock?cantidad={cantidad}", productoId, cantidad)
                     .retrieve()
                     .toBodilessEntity();
         } catch (Exception e) {
-            System.out.println("DEBUG ERROR reservarStock: " + e.getClass().getName() + " - " + e.getMessage());
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente para el producto");
         }
     }
 
     public void revertirStock(UUID productoId, int cantidad) {
         try {
-            restClient.post()
+            restClient.patch()
                     .uri("/productos/{id}/revertir-stock?cantidad={cantidad}", productoId, cantidad)
                     .retrieve()
                     .toBodilessEntity();
