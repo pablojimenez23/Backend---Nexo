@@ -83,7 +83,10 @@ public class PedidoController {
         UUID clienteId = obtenerUserId(auth);
         var tienda = tiendaClient.obtenerTienda(request.tiendaId());
 
-        if (!tiendaEstaAbierta(tienda.horario())) {
+        boolean abierta = tiendaEstaAbierta(tienda.horario());
+        System.out.println("DEBUG horario tienda: " + tienda.horario() + " - hora Chile ahora: " + LocalTime.now(ZONA_CHILE) + " - abierta: " + abierta);
+
+        if (!abierta) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "La tienda se encuentra cerrada en este momento");
         }
