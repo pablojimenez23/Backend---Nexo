@@ -1,5 +1,6 @@
 package com.nexo.msorders.client;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -12,6 +13,9 @@ import java.util.UUID;
 public class ProductoClient {
 
     private final RestClient restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/products");
+
+    @Value("${internal.api.key}")
+    private String internalApiKey;
 
     public ProductoDTO obtenerProducto(UUID productoId) {
         try {
@@ -34,10 +38,10 @@ public class ProductoClient {
         try {
             restClient.patch()
                     .uri("/productos/{id}/reservar-stock?cantidad={cantidad}", productoId, cantidad)
+                    .header("X-Internal-Key", internalApiKey)
                     .retrieve()
                     .toBodilessEntity();
         } catch (Exception e) {
-            System.out.println("DEBUG ERROR reservarStock: " + e.getClass().getName() + " - " + e.getMessage());
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente para el producto");
         }
     }
@@ -46,6 +50,7 @@ public class ProductoClient {
         try {
             restClient.patch()
                     .uri("/productos/{id}/revertir-stock?cantidad={cantidad}", productoId, cantidad)
+                    .header("X-Internal-Key", internalApiKey)
                     .retrieve()
                     .toBodilessEntity();
         } catch (Exception e) {
