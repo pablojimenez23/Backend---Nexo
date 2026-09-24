@@ -81,7 +81,10 @@ public class PedidoController {
             JwtAuthenticationToken auth) {
 
         UUID clienteId = obtenerUserId(auth);
+        System.out.println("DEBUG crear pedido - clienteId: " + clienteId + " tiendaId: " + request.tiendaId());
+
         var tienda = tiendaClient.obtenerTienda(request.tiendaId());
+        System.out.println("DEBUG tienda obtenida: " + tienda.estado() + " montoMinimo: " + tienda.montoMinimo());
 
         boolean abierta = tiendaEstaAbierta(tienda.horario());
         System.out.println("DEBUG horario tienda: " + tienda.horario() + " - hora Chile ahora: " + LocalTime.now(ZONA_CHILE) + " - abierta: " + abierta);
@@ -94,9 +97,15 @@ public class PedidoController {
         BigDecimal subtotal = BigDecimal.ZERO;
         List<ItemPedido> items = new java.util.ArrayList<>();
 
+        System.out.println("DEBUG cantidad de items en el request: " + request.items().size());
+
         for (var itemReq : request.items()) {
+            System.out.println("DEBUG procesando item - productoId: " + itemReq.productoId() + " cantidad: " + itemReq.cantidad());
             var producto = productoClient.obtenerProducto(itemReq.productoId());
+            System.out.println("DEBUG producto obtenido: " + producto.nombre() + " stock: " + producto.stock() + " precio: " + producto.precio());
+
             productoClient.reservarStock(itemReq.productoId(), itemReq.cantidad());
+            System.out.println("DEBUG stock reservado OK para: " + producto.nombre());
 
             ItemPedido item = new ItemPedido();
             item.setProductoId(itemReq.productoId());
@@ -107,7 +116,10 @@ public class PedidoController {
             subtotal = subtotal.add(producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad())));
         }
 
+        System.out.println("DEBUG subtotal calculado: " + subtotal);
+
         if (tienda.montoMinimo() != null && subtotal.compareTo(tienda.montoMinimo()) < 0) {
+            System.out.println("DEBUG RECHAZADO por monto minimo. subtotal: " + subtotal + " montoMinimo: " + tienda.montoMinimo());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El pedido no alcanza el monto mínimo de la tienda: " + tienda.montoMinimo());
         }
@@ -131,9 +143,13 @@ public class PedidoController {
         pedido.setTotal(total);
         pedido.setPago(pago);
 
+        System.out.println("DEBUG intentando guardar pedido...");
         Pedido guardado = pedidoRepository.save(pedido);
+        System.out.println("DEBUG pedido guardado OK con id: " + guardado.getId());
+
         items.forEach(item -> item.setPedido(guardado));
         itemPedidoRepository.saveAll(items);
+        System.out.println("DEBUG items guardados OK");
 
         return ResponseEntity.status(HttpStatus.CREATED).body(PedidoResponseDTO.desde(guardado));
     }

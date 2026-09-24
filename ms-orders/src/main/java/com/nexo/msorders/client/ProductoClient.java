@@ -37,6 +37,7 @@ public class ProductoClient {
                     .retrieve()
                     .toBodilessEntity();
         } catch (Exception e) {
+            System.out.println("DEBUG ERROR reservarStock: " + e.getClass().getName() + " - " + e.getMessage());
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente para el producto");
         }
     }
