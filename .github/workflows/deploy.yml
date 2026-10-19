@@ -7,7 +7,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REGISTRY: 718121012196.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REGISTRY: 103158825723.dkr.ecr.us-east-1.amazonaws.com
 
 jobs:
   build-and-push:
@@ -15,7 +15,7 @@ jobs:
 
     strategy:
       matrix:
-        service: [ms-users, ms-stores, ms-products, ms-orders]
+        service: [ms-users, ms-stores, ms-products, ms-orders, ms-queues]
 
     steps:
       - name: Checkout del código

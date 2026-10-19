@@ -1,0 +1,65 @@
+server:
+  port: 8085
+  servlet:
+    context-path: /messaging
+
+spring:
+  application:
+    name: ms-queues
+  web:
+    error:
+      include-message: always
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ZoKCVBrHG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# ---------------------------------------------------------------------------
+# Configuración centralizada de la mensajería de NEXO.
+# Este es el único lugar donde se declaran los canales (colas SQS), los
+# destinos (topics SNS) y las reglas de distribución (qué eventos recibe
+# cada cola). Al arrancar, ms-queues crea lo que falte a partir de esto.
+# ---------------------------------------------------------------------------
+nexo:
+  sqs:
+    region: us-east-1
+    defaults:
+      max-receive-count: 3          # intentos antes de mandar el mensaje a la DLQ
+      visibility-timeout-seconds: 30
+      retention-seconds: 345600     # 4 días
+    queues:
+      - name: nexo-notificaciones   # consumidor: ms-users (avisos a cliente, tienda y conductor)
+        dlq-name: nexo-notificaciones-dlq
+      - name: nexo-puntos           # consumidor: ms-users (puntos de fidelización)
+        dlq-name: nexo-puntos-dlq
+      - name: nexo-stock            # consumidor: ms-products (devolución de stock)
+        dlq-name: nexo-stock-dlq
+  sns:
+    topics:
+      - name: nexo-pedidos-eventos  # publica: ms-orders
+        subscriptions:
+          - queue: nexo-notificaciones
+            eventos:
+              - pedido.pagado
+              - pedido.confirmado
+              - pedido.listo
+              - pedido.aceptado
+              - pedido.entregado
+              - pedido.cancelado
+          - queue: nexo-puntos
+            eventos:
+              - pedido.completado
+          - queue: nexo-stock
+            eventos:
+              - pedido.cancelado
