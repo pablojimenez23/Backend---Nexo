@@ -24,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +45,8 @@ public class PedidoController {
 
     private static final Set<Pedido.Estado> CANCELABLES_SIN_CARGO =
             EnumSet.of(Pedido.Estado.CREATED, Pedido.Estado.PAID);
+
+    private static final ZoneId ZONA_CHILE = ZoneId.of("America/Santiago");
 
     private static final Pattern PATRON_HORARIO =
             Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
@@ -347,7 +350,7 @@ public class PedidoController {
 
         LocalTime inicio = LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
         LocalTime fin = LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
-        LocalTime ahora = LocalTime.now();
+        LocalTime ahora = LocalTime.now(ZONA_CHILE);
 
         if (fin.isAfter(inicio)) {
             return !ahora.isBefore(inicio) && ahora.isBefore(fin);
