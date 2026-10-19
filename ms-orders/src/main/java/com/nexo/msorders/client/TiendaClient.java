@@ -11,7 +11,7 @@ import java.util.UUID;
 @Component
 public class TiendaClient {
 
-    private final RestClient restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/stores");
+    private final RestClient restClient = RestClient.create(System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-306620137.us-east-1.elb.amazonaws.com") + "/stores");
 
     public TiendaDTO obtenerTienda(UUID tiendaId) {
         try {

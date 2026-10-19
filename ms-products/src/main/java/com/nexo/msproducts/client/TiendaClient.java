@@ -13,7 +13,7 @@ public class TiendaClient {
     private final RestClient restClient;
 
     public TiendaClient() {
-        this.restClient = RestClient.create("http://nexo-alb-326907716.us-east-1.elb.amazonaws.com/stores");
+        this.restClient = RestClient.create(System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-306620137.us-east-1.elb.amazonaws.com") + "/stores");
     }
 
     public UUID obtenerOwnerId(UUID tiendaId) {
