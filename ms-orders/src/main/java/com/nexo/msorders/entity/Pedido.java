@@ -1,6 +1,18 @@
 package com.nexo.msorders.entity;
 
-import jakarta.persistence.*;
+import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.OneToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.Table;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -54,6 +66,17 @@ public class Pedido {
     @Column(name = "motivo_cancelacion")
     private String motivoCancelacion;
 
+    /** Valor en pesos de los productos pagados con puntos (ya descontado del total). */
+    @Column(name = "descuento_puntos")
+    private BigDecimal descuentoPuntos;
+
+    @Column(name = "puntos_canjeados")
+    private Long puntosCanjeados;
+
+    /** Id del canje en ms-users, para devolver los puntos si el pedido se cancela. */
+    @Column(name = "canje_id")
+    private UUID canjeId;
+
     @Column(name = "creado_en", nullable = false, updatable = false)
     private Instant creadoEn;
 
@@ -95,6 +118,12 @@ public class Pedido {
     public void setCargoCancelacion(BigDecimal cargoCancelacion) { this.cargoCancelacion = cargoCancelacion; }
     public String getMotivoCancelacion() { return motivoCancelacion; }
     public void setMotivoCancelacion(String motivoCancelacion) { this.motivoCancelacion = motivoCancelacion; }
+    public BigDecimal getDescuentoPuntos() { return descuentoPuntos; }
+    public void setDescuentoPuntos(BigDecimal descuentoPuntos) { this.descuentoPuntos = descuentoPuntos; }
+    public Long getPuntosCanjeados() { return puntosCanjeados; }
+    public void setPuntosCanjeados(Long puntosCanjeados) { this.puntosCanjeados = puntosCanjeados; }
+    public UUID getCanjeId() { return canjeId; }
+    public void setCanjeId(UUID canjeId) { this.canjeId = canjeId; }
     public Instant getCreadoEn() { return creadoEn; }
 
     public enum Estado {
