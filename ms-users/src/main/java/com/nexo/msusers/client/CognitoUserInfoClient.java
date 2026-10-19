@@ -10,7 +10,7 @@ import java.util.Map;
 public class CognitoUserInfoClient {
 
     private final RestClient restClient =
-            RestClient.create("https://us-east-1zokcvbrhg.auth.us-east-1.amazoncognito.com");
+        RestClient.create(System.getenv().getOrDefault("COGNITO_DOMAIN", "https://us-east-1mipjia45q.auth.us-east-1.amazoncognito.com"));
 
     public Map<String, Object> obtenerUserInfo(String accessToken) {
         return restClient.get()
