@@ -33,6 +33,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/notificaciones/internal").permitAll()
                 .requestMatchers(HttpMethod.POST, "/admin/login").permitAll()
+                // Canje de puntos: lo llama ms-orders con X-Internal-Key (la clave se valida en el controller)
+                .requestMatchers(HttpMethod.POST, "/puntos/internal/**").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())));
