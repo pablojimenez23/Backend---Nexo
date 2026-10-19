@@ -1,7 +1,5 @@
 package com.nexo.msorders.controller;
 
-import com.nexo.msorders.client.ConductorClient;
-import com.nexo.msorders.client.NotificacionClient;
 import com.nexo.msorders.client.ProductoClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
@@ -9,6 +7,7 @@ import com.nexo.msorders.dto.CrearPedidoRequestDTO;
 import com.nexo.msorders.dto.PedidoResponseDTO;
 import com.nexo.msorders.entity.PagoSimulado;
 import com.nexo.msorders.entity.Pedido;
+import com.nexo.msorders.messaging.EventoPublisher;
 import com.nexo.msorders.repository.ItemPedidoRepository;
 import com.nexo.msorders.repository.PedidoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,7 +29,6 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -40,8 +38,7 @@ class PedidoControllerTest {
     @Mock private ItemPedidoRepository itemPedidoRepository;
     @Mock private TiendaClient tiendaClient;
     @Mock private ProductoClient productoClient;
-    @Mock private NotificacionClient notificacionClient;
-    @Mock private ConductorClient conductorClient;
+    @Mock private EventoPublisher eventos;
     @Mock private JwtAuthenticationToken auth;
     @Mock private Jwt jwt;
 
@@ -55,7 +52,7 @@ class PedidoControllerTest {
     @BeforeEach
     void setUp() {
         controller = new PedidoController(pedidoRepository, itemPedidoRepository,
-                tiendaClient, productoClient, notificacionClient, conductorClient);
+                tiendaClient, productoClient, eventos);
         ReflectionTestUtils.setField(controller, "internalApiKey", INTERNAL_KEY);
         lenient().when(auth.getPrincipal()).thenReturn(jwt);
     }
@@ -158,7 +155,7 @@ class PedidoControllerTest {
     // ==================== pagar ====================
 
     @Test
-    void pagar_pedidoCreated_pasaAPaid() {
+    void pagar_pedidoCreated_pasaAPaidYPublicaEvento() {
         UUID id = UUID.randomUUID();
         Pedido pedido = crearPedidoDePrueba(Pedido.Estado.CREATED);
 
@@ -167,11 +164,29 @@ class PedidoControllerTest {
         when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
         when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
 
-        PedidoResponseDTO resultado = controller.pagar(id, auth);
+        controller.pagar(id, auth);
 
         assertEquals(Pedido.Estado.PAID, pedido.getEstado());
         assertEquals(PagoSimulado.Estado.APPROVED, pedido.getPago().getEstado());
-        verify(notificacionClient, atLeastOnce()).enviar(any(), anyString(), anyString());
+        verify(eventos).publicar(argThat(e ->
+                "pedido.pagado".equals(e.evento()) && OWNER_ID.equals(e.ownerId())));
+    }
+
+    @Test
+    void pagar_tiendaNoResponde_publicaEventoSinOwner() {
+        UUID id = UUID.randomUUID();
+        Pedido pedido = crearPedidoDePrueba(Pedido.Estado.CREATED);
+
+        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
+        when(pedidoRepository.findById(id)).thenReturn(Optional.of(pedido));
+        when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenThrow(new RuntimeException("ms-stores caído"));
+
+        controller.pagar(id, auth);
+
+        assertEquals(Pedido.Estado.PAID, pedido.getEstado());
+        verify(eventos).publicar(argThat(e ->
+                "pedido.pagado".equals(e.evento()) && e.ownerId() == null));
     }
 
     @Test
@@ -183,6 +198,7 @@ class PedidoControllerTest {
         when(pedidoRepository.findById(id)).thenReturn(Optional.of(pedido));
 
         assertThrows(ResponseStatusException.class, () -> controller.pagar(id, auth));
+        verify(eventos, never()).publicar(any());
     }
 
     // ==================== cancelar ====================
@@ -203,6 +219,8 @@ class PedidoControllerTest {
         assertEquals(Pedido.Estado.CANCELLED, pedido.getEstado());
         assertEquals(0, pedido.getPago().getMontoReembolsado().compareTo(pedido.getTotal()));
         assertNull(pedido.getCargoCancelacion());
+        verify(eventos).publicar(argThat(e -> "pedido.cancelado".equals(e.evento())));
+        verify(productoClient, never()).revertirStock(any(), anyInt());
     }
 
     @Test
@@ -233,12 +251,13 @@ class PedidoControllerTest {
 
         assertThrows(ResponseStatusException.class, () -> controller.cancelar(id, request, auth));
         verify(pedidoRepository, never()).save(any());
+        verify(eventos, never()).publicar(any());
     }
 
     // ==================== tomarOrden / marcarListo ====================
 
     @Test
-    void tomarOrden_desdeEstadoPaid_pasaAConfirmed() {
+    void tomarOrden_desdeEstadoPaid_pasaAConfirmedYPublicaEvento() {
         UUID id = UUID.randomUUID();
         Pedido pedido = crearPedidoDePrueba(Pedido.Estado.PAID);
 
@@ -248,6 +267,7 @@ class PedidoControllerTest {
         controller.tomarOrden(id);
 
         assertEquals(Pedido.Estado.CONFIRMED, pedido.getEstado());
+        verify(eventos).publicar(argThat(e -> "pedido.confirmado".equals(e.evento())));
     }
 
     @Test
@@ -258,28 +278,27 @@ class PedidoControllerTest {
         when(pedidoRepository.findById(id)).thenReturn(Optional.of(pedido));
 
         assertThrows(ResponseStatusException.class, () -> controller.tomarOrden(id));
+        verify(eventos, never()).publicar(any());
     }
 
     @Test
-    void marcarListo_notificaConductoresDisponibles() {
+    void marcarListo_pasaAReadyYPublicaEvento() {
         UUID id = UUID.randomUUID();
         Pedido pedido = crearPedidoDePrueba(Pedido.Estado.CONFIRMED);
-        UUID conductorSub = UUID.randomUUID();
 
         when(pedidoRepository.findById(id)).thenReturn(Optional.of(pedido));
         when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(conductorClient.obtenerConductoresDisponibles()).thenReturn(List.of(conductorSub.toString()));
 
         controller.marcarListo(id);
 
         assertEquals(Pedido.Estado.READY, pedido.getEstado());
-        verify(notificacionClient).enviar(eq(conductorSub), anyString(), anyString());
+        verify(eventos).publicar(argThat(e -> "pedido.listo".equals(e.evento())));
     }
 
     // ==================== aceptar ====================
 
     @Test
-    void aceptar_pedidoLibre_seAsignaCorrectamente() {
+    void aceptar_pedidoLibre_seAsignaYPublicaEvento() {
         UUID id = UUID.randomUUID();
         UUID conductorId = UUID.randomUUID();
         Pedido pedido = crearPedidoDePrueba(Pedido.Estado.READY);
@@ -293,6 +312,8 @@ class PedidoControllerTest {
 
         assertNotNull(resultado);
         verify(pedidoRepository).asignarConductor(id, conductorId);
+        verify(eventos).publicar(argThat(e ->
+                "pedido.aceptado".equals(e.evento()) && OWNER_ID.equals(e.ownerId())));
     }
 
     @Test
@@ -305,6 +326,7 @@ class PedidoControllerTest {
 
         assertThrows(ResponseStatusException.class, () -> controller.aceptar(id, auth));
         verify(pedidoRepository, never()).findById(any());
+        verify(eventos, never()).publicar(any());
     }
 
     // ==================== entregar ====================
@@ -323,6 +345,7 @@ class PedidoControllerTest {
         controller.entregar(id, auth);
 
         assertEquals(Pedido.Estado.DELIVERED, pedido.getEstado());
+        verify(eventos).publicar(argThat(e -> "pedido.entregado".equals(e.evento())));
     }
 
     @Test
@@ -355,7 +378,7 @@ class PedidoControllerTest {
     // ==================== confirmarRecepcion ====================
 
     @Test
-    void confirmarRecepcion_pedidoDelivered_pasaACompleted() {
+    void confirmarRecepcion_pedidoDelivered_pasaACompletedYPublicaEvento() {
         UUID id = UUID.randomUUID();
         Pedido pedido = crearPedidoDePrueba(Pedido.Estado.DELIVERED);
 
@@ -366,6 +389,7 @@ class PedidoControllerTest {
         controller.confirmarRecepcion(id, auth);
 
         assertEquals(Pedido.Estado.COMPLETED, pedido.getEstado());
+        verify(eventos).publicar(argThat(e -> "pedido.completado".equals(e.evento())));
     }
 
     @Test

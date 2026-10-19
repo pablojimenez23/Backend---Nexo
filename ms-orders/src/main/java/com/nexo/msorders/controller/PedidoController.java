@@ -1,7 +1,5 @@
 package com.nexo.msorders.controller;
 
-import com.nexo.msorders.client.ConductorClient;
-import com.nexo.msorders.client.NotificacionClient;
 import com.nexo.msorders.client.ProductoClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
@@ -10,6 +8,8 @@ import com.nexo.msorders.dto.PedidoResponseDTO;
 import com.nexo.msorders.entity.ItemPedido;
 import com.nexo.msorders.entity.PagoSimulado;
 import com.nexo.msorders.entity.Pedido;
+import com.nexo.msorders.messaging.EventoPedido;
+import com.nexo.msorders.messaging.EventoPublisher;
 import com.nexo.msorders.repository.ItemPedidoRepository;
 import com.nexo.msorders.repository.PedidoRepository;
 import jakarta.validation.Valid;
@@ -24,7 +24,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -49,14 +48,11 @@ public class PedidoController {
     private static final Pattern PATRON_HORARIO =
             Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
 
-    private static final ZoneId ZONA_CHILE = ZoneId.of("America/Santiago");
-
     private final PedidoRepository pedidoRepository;
     private final ItemPedidoRepository itemPedidoRepository;
     private final TiendaClient tiendaClient;
     private final ProductoClient productoClient;
-    private final NotificacionClient notificacionClient;
-    private final ConductorClient conductorClient;
+    private final EventoPublisher eventos;
 
     @Value("${internal.api.key}")
     private String internalApiKey;
@@ -65,14 +61,12 @@ public class PedidoController {
                              ItemPedidoRepository itemPedidoRepository,
                              TiendaClient tiendaClient,
                              ProductoClient productoClient,
-                             NotificacionClient notificacionClient,
-                             ConductorClient conductorClient) {
+                             EventoPublisher eventos) {
         this.pedidoRepository = pedidoRepository;
         this.itemPedidoRepository = itemPedidoRepository;
         this.tiendaClient = tiendaClient;
         this.productoClient = productoClient;
-        this.notificacionClient = notificacionClient;
-        this.conductorClient = conductorClient;
+        this.eventos = eventos;
     }
 
     @PostMapping
@@ -145,18 +139,9 @@ public class PedidoController {
         pedido.setEstado(Pedido.Estado.PAID);
         Pedido guardado = pedidoRepository.save(pedido);
 
-        notificacionClient.enviar(guardado.getClienteId(), "¡Pago confirmado!",
-                "Tu pedido fue pagado con éxito. La tienda lo va a preparar pronto.");
-
-        try {
-            var tienda = tiendaClient.obtenerTienda(guardado.getTiendaId());
-            notificacionClient.enviar(tienda.ownerId(), "¡Nuevo pedido recibido!",
-                    "Tenés un pedido pagado esperando ser tomado.");
-        } catch (Exception e) {
-            // Si falla el aviso a la tienda, no bloqueamos el pago del cliente
-        }
-
-        return PedidoResponseDTO.desde(guardado);
+        PedidoResponseDTO dto = PedidoResponseDTO.desde(guardado);
+        eventos.publicar(EventoPedido.de("pedido.pagado", dto, ownerDe(guardado.getTiendaId()), List.of()));
+        return dto;
     }
 
     @PatchMapping("/{id}/cancelar")
@@ -178,8 +163,9 @@ public class PedidoController {
                     "El pedido ya no admite cancelación en su estado actual");
         }
 
-        itemPedidoRepository.findByPedidoId(pedido.getId())
-                .forEach(item -> productoClient.revertirStock(item.getProductoId(), item.getCantidad()));
+        List<EventoPedido.Item> items = itemPedidoRepository.findByPedidoId(pedido.getId()).stream()
+                .map(i -> new EventoPedido.Item(i.getProductoId(), i.getCantidad()))
+                .collect(Collectors.toList());
 
         pedido.getPago().setEstado(PagoSimulado.Estado.REFUNDED);
         pedido.setEstado(Pedido.Estado.CANCELLED);
@@ -187,33 +173,22 @@ public class PedidoController {
 
         Pedido guardado = pedidoRepository.save(pedido);
 
-        if (guardado.getConductorId() != null) {
-            notificacionClient.enviar(guardado.getConductorId(), "Pedido cancelado",
-                    "El pedido que ibas a retirar fue cancelado por el cliente.");
-        }
-
-        return PedidoResponseDTO.desde(guardado);
+        PedidoResponseDTO dto = PedidoResponseDTO.desde(guardado);
+        eventos.publicar(EventoPedido.de("pedido.cancelado", dto, null, items));
+        return dto;
     }
 
     @PatchMapping("/{id}/tomar-orden")
     public PedidoResponseDTO tomarOrden(@PathVariable UUID id) {
         PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.PAID, Pedido.Estado.CONFIRMED);
-        notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido fue tomado!",
-                "La tienda ya lo está preparando.");
+        eventos.publicar(EventoPedido.de("pedido.confirmado", resultado, null, List.of()));
         return resultado;
     }
 
     @PatchMapping("/{id}/listo")
     public PedidoResponseDTO marcarListo(@PathVariable UUID id) {
         PedidoResponseDTO resultado = avanzarEstado(id, Pedido.Estado.CONFIRMED, Pedido.Estado.READY);
-        notificacionClient.enviar(resultado.clienteId(), "¡Tu pedido está listo!",
-                "Un conductor lo va a retirar pronto.");
-
-        conductorClient.obtenerConductoresDisponibles().forEach(conductorSub ->
-                notificacionClient.enviar(UUID.fromString(conductorSub), "¡Nuevo pedido disponible!",
-                        "Hay un pedido esperando ser retirado cerca tuyo.")
-        );
-
+        eventos.publicar(EventoPedido.de("pedido.listo", resultado, null, List.of()));
         return resultado;
     }
 
@@ -228,15 +203,9 @@ public class PedidoController {
 
         Pedido pedido = pedidoRepository.findById(id).orElseThrow();
 
-        try {
-            var tienda = tiendaClient.obtenerTienda(pedido.getTiendaId());
-            notificacionClient.enviar(tienda.ownerId(), "Un conductor viene en camino",
-                    "Ya asignamos un conductor para retirar el pedido.");
-        } catch (Exception e) {
-            // No bloqueamos la aceptación del conductor si falla este aviso
-        }
-
-        return PedidoResponseDTO.desde(pedido);
+        PedidoResponseDTO dto = PedidoResponseDTO.desde(pedido);
+        eventos.publicar(EventoPedido.de("pedido.aceptado", dto, ownerDe(pedido.getTiendaId()), List.of()));
+        return dto;
     }
 
     @PatchMapping("/{id}/entregado")
@@ -251,10 +220,9 @@ public class PedidoController {
         pedido.setEstado(Pedido.Estado.DELIVERED);
         Pedido guardado = pedidoRepository.save(pedido);
 
-        notificacionClient.enviar(guardado.getClienteId(), "¡Pedido entregado!",
-                "Confirmá en la app que lo recibiste correctamente.");
-
-        return PedidoResponseDTO.desde(guardado);
+        PedidoResponseDTO dto = PedidoResponseDTO.desde(guardado);
+        eventos.publicar(EventoPedido.de("pedido.entregado", dto, null, List.of()));
+        return dto;
     }
 
     @PatchMapping("/{id}/confirmar-recepcion")
@@ -265,7 +233,10 @@ public class PedidoController {
                     "Solo podés confirmar la recepción de un pedido ya entregado");
         }
         pedido.setEstado(Pedido.Estado.COMPLETED);
-        return PedidoResponseDTO.desde(pedidoRepository.save(pedido));
+
+        PedidoResponseDTO dto = PedidoResponseDTO.desde(pedidoRepository.save(pedido));
+        eventos.publicar(EventoPedido.de("pedido.completado", dto, null, List.of()));
+        return dto;
     }
 
     @GetMapping("/{id}")
@@ -355,6 +326,15 @@ public class PedidoController {
         return pedido;
     }
 
+    /** Dueño de la tienda; si ms-stores no responde devuelve null y el evento sale igual. */
+    private UUID ownerDe(UUID tiendaId) {
+        try {
+            return tiendaClient.obtenerTienda(tiendaId).ownerId();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private boolean tiendaEstaAbierta(String horario) {
         if (horario == null || horario.isBlank()) {
             return true;
@@ -367,7 +347,7 @@ public class PedidoController {
 
         LocalTime inicio = LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
         LocalTime fin = LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
-        LocalTime ahora = LocalTime.now(ZONA_CHILE);
+        LocalTime ahora = LocalTime.now();
 
         if (fin.isAfter(inicio)) {
             return !ahora.isBefore(inicio) && ahora.isBefore(fin);
