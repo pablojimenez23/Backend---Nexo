@@ -1,5 +1,7 @@
 package com.nexo.msusers.controller;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,6 +18,7 @@ import software.amazon.awssdk.services.cognitoidentityprovider.model.AuthFlowTyp
 import software.amazon.awssdk.services.cognitoidentityprovider.model.CognitoIdentityProviderException;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.ListUsersRequest;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.ListUsersResponse;
+import software.amazon.awssdk.services.cognitoidentityprovider.model.UserStatusType;
 import software.amazon.awssdk.services.cognitoidentityprovider.model.UserType;
 
 import java.util.List;
@@ -24,6 +27,9 @@ import java.util.Map;
 @RestController
 @RequestMapping("/admin")
 public class AdminLoginController {
+
+    private static final Logger log = LoggerFactory.getLogger(AdminLoginController.class);
+    private static final String MENSAJE_CREDENCIALES = "Email o contraseña incorrectos";
 
     @Value("${cognito.user-pool-id}")
     private String userPoolId;
@@ -57,6 +63,11 @@ public class AdminLoginController {
             AdminInitiateAuthResponse response = cognitoClient.adminInitiateAuth(authRequest);
 
             var result = response.authenticationResult();
+            if (result == null) {
+                // Cognito pidió un paso extra (cambio de contraseña, MFA): este login no lo soporta.
+                log.warn("Login de admin: Cognito devolvió un desafío ({}) en lugar de tokens", response.challengeNameAsString());
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, MENSAJE_CREDENCIALES);
+            }
 
             return ResponseEntity.ok(new LoginResponse(
                     result.accessToken(),
@@ -65,30 +76,37 @@ public class AdminLoginController {
             ));
 
         } catch (CognitoIdentityProviderException e) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email o contraseña incorrectos");
+            String detalle = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : e.getClass().getSimpleName();
+            log.warn("Login de admin rechazado por Cognito: {}", detalle);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, MENSAJE_CREDENCIALES);
         }
     }
 
     /**
-     * El "username" real en Cognito puede no coincidir con el email:
-     * - Usuarios creados manualmente (admin create-user): username = email
-     * - Usuarios via proveedor externo (Google): username = "google_<id>"
-     * Este método busca el usuario por email y devuelve su username real de Cognito.
+     * El "username" real en Cognito puede no coincidir con el email, y una misma persona puede tener
+     * varios usuarios con el mismo correo:
+     * - Usuarios creados manualmente (admin create-user): username = sub o email, tienen contraseña.
+     * - Usuarios via proveedor externo (Google): username = "google_<id>", NO tienen contraseña.
+     * Este login por contraseña solo sirve para los primeros, así que se ignoran los EXTERNAL_PROVIDER.
      */
     private String resolverUsername(String email) {
+        if (email == null || email.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, MENSAJE_CREDENCIALES);
+        }
+
+        String emailSeguro = email.trim().replace("\\", "\\\\").replace("\"", "\\\"");
         ListUsersRequest listRequest = ListUsersRequest.builder()
                 .userPoolId(userPoolId)
-                .filter("email = \"" + email + "\"")
-                .limit(1)
+                .filter("email = \"" + emailSeguro + "\"")
                 .build();
 
         ListUsersResponse listResponse = cognitoClient.listUsers(listRequest);
         List<UserType> usuarios = listResponse.users();
 
-        if (usuarios.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Email o contraseña incorrectos");
-        }
-
-        return usuarios.get(0).username();
+        return usuarios.stream()
+                .filter(u -> u.userStatus() != UserStatusType.EXTERNAL_PROVIDER)
+                .map(UserType::username)
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, MENSAJE_CREDENCIALES));
     }
 }
