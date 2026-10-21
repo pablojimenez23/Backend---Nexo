@@ -40,9 +40,10 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOriginPatterns(List.of(
                 "http://localhost:*",
-                "http://nexo-panel-admin.s3-website-us-east-1.amazonaws.com"
+                "http://nexo-panel-admin.s3-website-us-east-1.amazonaws.com",
+                "http://nexo-panel-103158825723.s3-website-us-east-1.amazonaws.com"
         ));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
 
