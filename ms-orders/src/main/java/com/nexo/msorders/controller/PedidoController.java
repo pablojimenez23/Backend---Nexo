@@ -14,7 +14,6 @@ import com.nexo.msorders.messaging.EventoPublisher;
 import com.nexo.msorders.repository.ItemPedidoRepository;
 import com.nexo.msorders.repository.PedidoRepository;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -59,27 +58,35 @@ public class PedidoController {
     private final TiendaClient tiendaClient;
     private final ProductoClient productoClient;
     private final EventoPublisher eventos;
+    private final PuntosClient puntosClient;
 
     @Value("${internal.api.key}")
     private String internalApiKey;
-
-    @Autowired
-    private PuntosClient puntosClient;
 
     /** Cuántos pesos vale un punto al pagar productos con puntos (1 punto = $10). */
     @Value("${nexo.puntos.pesos-por-punto-canje:10}")
     private BigDecimal pesosPorPuntoCanje;
 
+    /** Máximo del subtotal de productos que se puede pagar con puntos en un pedido (en %). */
+    @Value("${nexo.puntos.tope-canje-porcentaje:10}")
+    private BigDecimal topeCanjePorcentaje;
+
+    /** Mínimo de puntos para poder pagar con puntos en un pedido. */
+    @Value("${nexo.puntos.minimo-canje:50}")
+    private long minimoCanje;
+
     public PedidoController(PedidoRepository pedidoRepository,
                              ItemPedidoRepository itemPedidoRepository,
                              TiendaClient tiendaClient,
                              ProductoClient productoClient,
-                             EventoPublisher eventos) {
+                             EventoPublisher eventos,
+                             PuntosClient puntosClient) {
         this.pedidoRepository = pedidoRepository;
         this.itemPedidoRepository = itemPedidoRepository;
         this.tiendaClient = tiendaClient;
         this.productoClient = productoClient;
         this.eventos = eventos;
+        this.puntosClient = puntosClient;
     }
 
     @PostMapping
@@ -95,9 +102,13 @@ public class PedidoController {
                     "La tienda se encuentra cerrada en este momento");
         }
 
+        long puntosACanjear = request.puntosACanjear() == null ? 0L : request.puntosACanjear();
+        if (puntosACanjear < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Los puntos a canjear no pueden ser negativos");
+        }
+
         BigDecimal subtotal = BigDecimal.ZERO;
-        BigDecimal descuentoPuntos = BigDecimal.ZERO;
-        long puntosACanjear = 0;
         List<ItemPedido> items = new java.util.ArrayList<>();
 
         for (var itemReq : request.items()) {
@@ -110,18 +121,35 @@ public class PedidoController {
             item.setPrecioUnitario(producto.precio());
             items.add(item);
 
-            BigDecimal valorLinea = producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad()));
-            subtotal = subtotal.add(valorLinea);
-
-            if (Boolean.TRUE.equals(itemReq.canjearConPuntos())) {
-                descuentoPuntos = descuentoPuntos.add(valorLinea);
-                puntosACanjear += puntosPara(valorLinea);
-            }
+            subtotal = subtotal.add(producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad())));
         }
 
         if (tienda.montoMinimo() != null && subtotal.compareTo(tienda.montoMinimo()) < 0) {
+            devolverReservas(request);
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El pedido no alcanza el monto mínimo de la tienda: " + tienda.montoMinimo());
+        }
+
+        BigDecimal descuentoPuntos = BigDecimal.ZERO;
+        if (puntosACanjear > 0) {
+            descuentoPuntos = BigDecimal.valueOf(puntosACanjear).multiply(pesosPorPuntoCanje);
+            BigDecimal tope = subtotal.multiply(topeCanjePorcentaje)
+                    .divide(BigDecimal.valueOf(100), 0, RoundingMode.FLOOR)
+                    .min(subtotal);
+
+            if (puntosACanjear < minimoCanje) {
+                devolverReservas(request);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "El mínimo para pagar con puntos es de " + minimoCanje + " puntos");
+            }
+            if (descuentoPuntos.compareTo(tope) > 0) {
+                long maximoPuntos = tope.divide(pesosPorPuntoCanje, 0, RoundingMode.FLOOR).longValue();
+                devolverReservas(request);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Solo podés pagar con puntos hasta el "
+                                + topeCanjePorcentaje.stripTrailingZeros().toPlainString()
+                                + " % del subtotal ($" + tope + ", " + maximoPuntos + " puntos)");
+            }
         }
 
         BigDecimal comision = subtotal.multiply(PORCENTAJE_COMISION);
@@ -132,7 +160,7 @@ public class PedidoController {
             try {
                 canjeId = puntosClient.canjear(clienteId, puntosACanjear);
             } catch (RuntimeException e) {
-                request.items().forEach(i -> productoClient.revertirStock(i.productoId(), i.cantidad()));
+                devolverReservas(request);
                 throw e;
             }
         }
@@ -354,9 +382,9 @@ public class PedidoController {
         return Map.of("valido", valido);
     }
 
-    /** Puntos que cuesta pagar con puntos un monto en pesos (redondeo hacia arriba). */
-    private long puntosPara(BigDecimal montoPesos) {
-        return montoPesos.divide(pesosPorPuntoCanje, 0, RoundingMode.CEILING).longValueExact();
+    /** Devuelve el stock reservado cuando el pedido se rechaza antes de crearse. */
+    private void devolverReservas(CrearPedidoRequestDTO request) {
+        request.items().forEach(i -> productoClient.revertirStock(i.productoId(), i.cantidad()));
     }
 
     private PedidoResponseDTO avanzarEstado(UUID id, Pedido.Estado desde, Pedido.Estado hacia) {

@@ -22,4 +22,11 @@ public interface MovimientoPuntosRepository extends JpaRepository<MovimientoPunt
     /** Cada fila es [usuarioId, puntos acumulados]. */
     @Query("select m.usuarioId, sum(m.puntos) from MovimientoPuntos m group by m.usuarioId")
     List<Object[]> acumuladosPorUsuario();
+
+    /** Acreditaciones de un cliente, de la más antigua a la más nueva (cada una es un lote con su vencimiento). */
+    List<MovimientoPuntos> findByUsuarioIdOrderByCreadoEnAsc(UUID usuarioId);
+
+    /** Clientes que alguna vez recibieron puntos. */
+    @Query("select distinct m.usuarioId from MovimientoPuntos m")
+    List<UUID> usuariosConPuntos();
 }

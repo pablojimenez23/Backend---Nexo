@@ -26,4 +26,7 @@ public interface CanjePuntosRepository extends JpaRepository<CanjePuntos, UUID> 
     /** Cada fila es [usuarioId, puntos canjeados vigentes]. */
     @Query("select c.usuarioId, sum(c.puntos) from CanjePuntos c where c.estado = :estado group by c.usuarioId")
     List<Object[]> canjeadosPorUsuario(@Param("estado") CanjePuntos.Estado estado);
+
+    /** Canjes de un cliente en un estado dado, del más antiguo al más nuevo. */
+    List<CanjePuntos> findByUsuarioIdAndEstadoOrderByCreadoEnAsc(UUID usuarioId, CanjePuntos.Estado estado);
 }

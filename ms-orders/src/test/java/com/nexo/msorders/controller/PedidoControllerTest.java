@@ -1,6 +1,7 @@
 package com.nexo.msorders.controller;
 
 import com.nexo.msorders.client.ProductoClient;
+import com.nexo.msorders.client.PuntosClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
 import com.nexo.msorders.dto.CrearPedidoRequestDTO;
@@ -39,6 +40,7 @@ class PedidoControllerTest {
     @Mock private TiendaClient tiendaClient;
     @Mock private ProductoClient productoClient;
     @Mock private EventoPublisher eventos;
+    @Mock private PuntosClient puntosClient;
     @Mock private JwtAuthenticationToken auth;
     @Mock private Jwt jwt;
 
@@ -52,8 +54,11 @@ class PedidoControllerTest {
     @BeforeEach
     void setUp() {
         controller = new PedidoController(pedidoRepository, itemPedidoRepository,
-                tiendaClient, productoClient, eventos);
+                tiendaClient, productoClient, eventos, puntosClient);
         ReflectionTestUtils.setField(controller, "internalApiKey", INTERNAL_KEY);
+        ReflectionTestUtils.setField(controller, "pesosPorPuntoCanje", new BigDecimal("10"));
+        ReflectionTestUtils.setField(controller, "topeCanjePorcentaje", new BigDecimal("10"));
+        ReflectionTestUtils.setField(controller, "minimoCanje", 50L);
         lenient().when(auth.getPrincipal()).thenReturn(jwt);
     }
 
@@ -104,6 +109,7 @@ class PedidoControllerTest {
 
         assertEquals(201, response.getStatusCode().value());
         verify(productoClient).reservarStock(productoId, 2);
+        verify(puntosClient, never()).canjear(any(), anyLong());
         verify(pedidoRepository).save(argThat(p ->
                 p.getSubtotal().compareTo(new BigDecimal("10000")) == 0
                         && p.getTotal().compareTo(new BigDecimal("12000")) == 0
@@ -150,6 +156,113 @@ class PedidoControllerTest {
         );
         assertEquals(400, excepcion.getStatusCode().value());
         verify(pedidoRepository, never()).save(any());
+        verify(productoClient).revertirStock(productoId, 1);
+    }
+
+    // ==================== crear: pago con puntos ====================
+
+    @Test
+    void crear_puntosNegativos_lanza400SinReservarStock() {
+        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
+        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
+
+        UUID productoId = UUID.randomUUID();
+        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
+                TIENDA_ID, "Calle Falsa 123",
+                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 1)),
+                -5L
+        );
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.crear(request, auth)
+        );
+
+        assertEquals(400, excepcion.getStatusCode().value());
+        verify(productoClient, never()).reservarStock(any(), anyInt());
+        verify(puntosClient, never()).canjear(any(), anyLong());
+    }
+
+    @Test
+    void crear_puntosSuperanElTope_lanza400YDevuelveStock() {
+        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
+        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
+
+        UUID productoId = UUID.randomUUID();
+        when(productoClient.obtenerProducto(productoId)).thenReturn(productoDePrueba(productoId, new BigDecimal("5000")));
+
+        // Subtotal 5000, tope 500 (50 puntos): 100 puntos = $1000 lo supera
+        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
+                TIENDA_ID, "Calle Falsa 123",
+                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 1)),
+                100L
+        );
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.crear(request, auth)
+        );
+
+        assertEquals(400, excepcion.getStatusCode().value());
+        verify(productoClient).revertirStock(productoId, 1);
+        verify(puntosClient, never()).canjear(any(), anyLong());
+        verify(pedidoRepository, never()).save(any());
+    }
+
+    @Test
+    void crear_puntosBajoElMinimo_lanza400YDevuelveStock() {
+        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
+        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
+
+        UUID productoId = UUID.randomUUID();
+        when(productoClient.obtenerProducto(productoId)).thenReturn(productoDePrueba(productoId, new BigDecimal("10000")));
+
+        // 30 puntos ($300) están dentro del tope (10 % de 10000) pero bajo el mínimo de 50
+        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
+                TIENDA_ID, "Calle Falsa 123",
+                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 1)),
+                30L
+        );
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.crear(request, auth)
+        );
+
+        assertEquals(400, excepcion.getStatusCode().value());
+        verify(productoClient).revertirStock(productoId, 1);
+        verify(puntosClient, never()).canjear(any(), anyLong());
+    }
+
+    @Test
+    void crear_puntosDentroDelTope_canjeaYDescuenta() {
+        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
+        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
+
+        UUID productoId = UUID.randomUUID();
+        when(productoClient.obtenerProducto(productoId)).thenReturn(productoDePrueba(productoId, new BigDecimal("10000")));
+
+        UUID canjeId = UUID.randomUUID();
+        when(puntosClient.canjear(CLIENTE_ID, 100L)).thenReturn(canjeId);
+        when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Subtotal 10000, tope 1000: 100 puntos = $1000, justo en el tope
+        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
+                TIENDA_ID, "Calle Falsa 123",
+                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 1)),
+                100L
+        );
+
+        ResponseEntity<PedidoResponseDTO> response = controller.crear(request, auth);
+
+        assertEquals(201, response.getStatusCode().value());
+        verify(puntosClient).canjear(CLIENTE_ID, 100L);
+        verify(pedidoRepository).save(argThat(p ->
+                p.getTotal().compareTo(new BigDecimal("11000")) == 0
+                        && p.getDescuentoPuntos().compareTo(new BigDecimal("1000")) == 0
+                        && p.getPuntosCanjeados() == 100L
+                        && canjeId.equals(p.getCanjeId())
+        ));
     }
 
     // ==================== pagar ====================

@@ -2,7 +2,6 @@ package com.nexo.msusers.service;
 
 import com.nexo.msusers.entity.CanjePuntos;
 import com.nexo.msusers.repository.CanjePuntosRepository;
-import com.nexo.msusers.repository.MovimientoPuntosRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -13,22 +12,23 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Saldo de puntos = acumulados por pedidos completados - canjes vigentes. */
+/** Saldo de puntos = acumulados vigentes (sin vencer) - canjes activos. */
 @Service
 public class CanjeService {
 
     private static final Logger log = LoggerFactory.getLogger(CanjeService.class);
 
-    private final MovimientoPuntosRepository movimientos;
     private final CanjePuntosRepository canjes;
+    private final SaldoPuntosService saldos;
 
-    public CanjeService(MovimientoPuntosRepository movimientos, CanjePuntosRepository canjes) {
-        this.movimientos = movimientos;
+    public CanjeService(CanjePuntosRepository canjes, SaldoPuntosService saldos) {
         this.canjes = canjes;
+        this.saldos = saldos;
     }
 
+    /** Saldo que se puede gastar hoy: no cuenta los puntos vencidos. */
     public long saldoDisponible(UUID usuarioId) {
-        return movimientos.saldoDe(usuarioId) - canjes.totalActivoDe(usuarioId);
+        return saldos.calcular(usuarioId).disponible();
     }
 
     @Transactional
@@ -37,7 +37,7 @@ public class CanjeService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Los puntos a canjear deben ser mayores a cero");
         }
         if (saldoDisponible(usuarioId) < puntos) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Puntos insuficientes");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Puntos insuficientes o vencidos");
         }
         CanjePuntos canje = new CanjePuntos();
         canje.setUsuarioId(usuarioId);

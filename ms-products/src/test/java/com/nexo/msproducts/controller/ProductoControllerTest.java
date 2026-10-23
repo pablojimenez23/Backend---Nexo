@@ -3,8 +3,11 @@ package com.nexo.msproducts.controller;
 import com.nexo.msproducts.client.TiendaClient;
 import com.nexo.msproducts.dto.ProductoRequestDTO;
 import com.nexo.msproducts.dto.ProductoResponseDTO;
+import com.nexo.msproducts.dto.ReservaStockResponseDTO;
+import com.nexo.msproducts.entity.Oferta;
 import com.nexo.msproducts.entity.Producto;
 import com.nexo.msproducts.repository.ProductoRepository;
+import com.nexo.msproducts.service.OfertaService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,7 +20,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -30,6 +35,7 @@ class ProductoControllerTest {
 
     @Mock private ProductoRepository productoRepository;
     @Mock private TiendaClient tiendaClient;
+    @Mock private OfertaService ofertaService;
     @Mock private JwtAuthenticationToken auth;
     @Mock private Jwt jwt;
 
@@ -41,7 +47,7 @@ class ProductoControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ProductoController(productoRepository, tiendaClient);
+        controller = new ProductoController(productoRepository, tiendaClient, ofertaService);
         ReflectionTestUtils.setField(controller, "internalApiKey", INTERNAL_KEY);
         lenient().when(auth.getPrincipal()).thenReturn(jwt);
     }
@@ -54,6 +60,16 @@ class ProductoControllerTest {
         producto.setStock(10);
         producto.setDisponible(true);
         return producto;
+    }
+
+    private Oferta ofertaDeTreintaPorCiento() {
+        Oferta o = new Oferta();
+        o.setTiendaId(TIENDA_ID);
+        o.setPorcentaje(30);
+        o.setInicio(Instant.now().minusSeconds(60));
+        o.setFin(Instant.now().plusSeconds(3600));
+        o.setLimitePorPedido(2);
+        return o;
     }
 
     private ProductoRequestDTO crearRequestDePrueba() {
@@ -79,6 +95,7 @@ class ProductoControllerTest {
         List<ProductoResponseDTO> resultado = controller.listarPorTienda(TIENDA_ID);
 
         assertEquals(1, resultado.size());
+        assertNull(resultado.get(0).oferta());
     }
 
     @Test
@@ -90,6 +107,22 @@ class ProductoControllerTest {
         assertTrue(resultado.isEmpty());
     }
 
+    @Test
+    void listarPorTienda_productoConOferta_incluyeElPrecioDeOferta() {
+        UUID productoId = UUID.randomUUID();
+        Producto producto = crearProductoDePrueba();
+        ReflectionTestUtils.setField(producto, "id", productoId);
+
+        when(productoRepository.findByTiendaId(TIENDA_ID)).thenReturn(List.of(producto));
+        when(ofertaService.vigentesPorTienda(eq(TIENDA_ID), any(Instant.class)))
+                .thenReturn(Map.of(productoId, ofertaDeTreintaPorCiento()));
+
+        List<ProductoResponseDTO> resultado = controller.listarPorTienda(TIENDA_ID);
+
+        assertNotNull(resultado.get(0).oferta());
+        assertEquals(0, resultado.get(0).oferta().precioOferta().compareTo(new BigDecimal("3500")));
+    }
+
     // ==================== obtenerPorId ====================
 
     @Test
@@ -97,7 +130,21 @@ class ProductoControllerTest {
         UUID id = UUID.randomUUID();
         when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
 
-        assertNotNull(controller.obtenerPorId(id));
+        ProductoResponseDTO resultado = controller.obtenerPorId(id);
+
+        assertNotNull(resultado);
+        assertNull(resultado.oferta());
+    }
+
+    @Test
+    void obtenerPorId_conOfertaVigente_laIncluye() {
+        UUID id = UUID.randomUUID();
+        when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
+        when(ofertaService.vigenteDe(eq(id), any(Instant.class))).thenReturn(Optional.of(ofertaDeTreintaPorCiento()));
+
+        ProductoResponseDTO resultado = controller.obtenerPorId(id);
+
+        assertEquals(30, resultado.oferta().porcentaje());
     }
 
     @Test
@@ -282,32 +329,62 @@ class ProductoControllerTest {
     // ==================== reservarStock ====================
 
     @Test
-    void reservarStock_stockSuficiente_descuenta() {
+    void reservarStock_stockSuficiente_descuentaYDevuelveLaOferta() {
         UUID id = UUID.randomUUID();
-        Producto producto = crearProductoDePrueba(); // stock = 10
+        UUID ofertaId = UUID.randomUUID();
+        Producto producto = crearProductoDePrueba();
+        ReservaStockResponseDTO reserva = new ReservaStockResponseDTO(ofertaId, new BigDecimal("3500"), 2);
 
         when(productoRepository.findById(id)).thenReturn(Optional.of(producto));
-        when(productoRepository.save(any(Producto.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productoRepository.reservarStock(id, 3)).thenReturn(1);
+        when(ofertaService.aplicarOferta(eq(producto), eq(3), any(Instant.class))).thenReturn(reserva);
 
-        ResponseEntity<Void> response = controller.reservarStock(id, 3, INTERNAL_KEY);
+        ResponseEntity<ReservaStockResponseDTO> response = controller.reservarStock(id, 3, INTERNAL_KEY);
 
         assertEquals(200, response.getStatusCode().value());
-        assertEquals(7, producto.getStock());
+        assertEquals(ofertaId, response.getBody().ofertaId());
+        assertEquals(2, response.getBody().unidadesEnOferta());
+        verify(productoRepository).reservarStock(id, 3);
     }
 
     @Test
     void reservarStock_stockInsuficiente_lanza409() {
         UUID id = UUID.randomUUID();
-        Producto producto = crearProductoDePrueba(); // stock = 10
+        Producto producto = crearProductoDePrueba();
 
         when(productoRepository.findById(id)).thenReturn(Optional.of(producto));
+        when(productoRepository.reservarStock(id, 50)).thenReturn(0);
 
         ResponseStatusException excepcion = assertThrows(
                 ResponseStatusException.class,
                 () -> controller.reservarStock(id, 50, INTERNAL_KEY)
         );
         assertEquals(409, excepcion.getStatusCode().value());
-        verify(productoRepository, never()).save(any());
+        verify(ofertaService, never()).aplicarOferta(any(), anyInt(), any());
+    }
+
+    @Test
+    void reservarStock_cantidadCero_lanza400() {
+        UUID id = UUID.randomUUID();
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.reservarStock(id, 0, INTERNAL_KEY)
+        );
+        assertEquals(400, excepcion.getStatusCode().value());
+        verify(productoRepository, never()).reservarStock(any(), anyInt());
+    }
+
+    @Test
+    void reservarStock_productoNoExiste_lanza404() {
+        UUID id = UUID.randomUUID();
+        when(productoRepository.findById(id)).thenReturn(Optional.empty());
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.reservarStock(id, 1, INTERNAL_KEY)
+        );
+        assertEquals(404, excepcion.getStatusCode().value());
     }
 
     @Test
@@ -326,14 +403,26 @@ class ProductoControllerTest {
     @Test
     void revertirStock_conKeyValida_sumaStock() {
         UUID id = UUID.randomUUID();
-        Producto producto = crearProductoDePrueba(); // stock = 10
 
-        when(productoRepository.findById(id)).thenReturn(Optional.of(producto));
-        when(productoRepository.save(any(Producto.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
 
-        controller.revertirStock(id, 5, INTERNAL_KEY);
+        controller.revertirStock(id, 5, null, 0, INTERNAL_KEY);
 
-        assertEquals(15, producto.getStock());
+        verify(productoRepository).revertirStock(id, 5);
+        verify(ofertaService).devolverCupo(null, 0);
+    }
+
+    @Test
+    void revertirStock_conOferta_devuelveElCupo() {
+        UUID id = UUID.randomUUID();
+        UUID ofertaId = UUID.randomUUID();
+
+        when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
+
+        controller.revertirStock(id, 3, ofertaId, 2, INTERNAL_KEY);
+
+        verify(productoRepository).revertirStock(id, 3);
+        verify(ofertaService).devolverCupo(ofertaId, 2);
     }
 
     @Test
@@ -342,7 +431,8 @@ class ProductoControllerTest {
 
         assertThrows(
                 ResponseStatusException.class,
-                () -> controller.revertirStock(id, 1, "key-incorrecta")
+                () -> controller.revertirStock(id, 1, null, 0, "key-incorrecta")
         );
+        verify(productoRepository, never()).revertirStock(any(), anyInt());
     }
 }
