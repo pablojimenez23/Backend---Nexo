@@ -3,6 +3,7 @@ package com.nexo.msorders.dto;
 import com.nexo.msorders.entity.Pedido;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
 public record PedidoResponseDTO(
@@ -20,9 +21,22 @@ public record PedidoResponseDTO(
         BigDecimal cargoCancelacion,
         String motivoCancelacion,
         BigDecimal descuentoPuntos,
-        Long puntosCanjeados
+        Long puntosCanjeados,
+        Instant creadoEn
 ) {
-    /** Constructor anterior (sin datos de canje), para no romper código ni tests existentes. */
+    /** Constructor sin fecha de creación, para no romper código ni tests existentes. */
+    public PedidoResponseDTO(UUID id, UUID clienteId, UUID tiendaId, UUID conductorId,
+                             String direccionEnvio, String estado, BigDecimal subtotal,
+                             BigDecimal costoEnvio, BigDecimal comisionPlataforma,
+                             BigDecimal gananciaConductor, BigDecimal total,
+                             BigDecimal cargoCancelacion, String motivoCancelacion,
+                             BigDecimal descuentoPuntos, Long puntosCanjeados) {
+        this(id, clienteId, tiendaId, conductorId, direccionEnvio, estado, subtotal, costoEnvio,
+                comisionPlataforma, gananciaConductor, total, cargoCancelacion, motivoCancelacion,
+                descuentoPuntos, puntosCanjeados, null);
+    }
+
+    /** Constructor anterior (sin datos de canje ni fecha), para no romper código ni tests existentes. */
     public PedidoResponseDTO(UUID id, UUID clienteId, UUID tiendaId, UUID conductorId,
                              String direccionEnvio, String estado, BigDecimal subtotal,
                              BigDecimal costoEnvio, BigDecimal comisionPlataforma,
@@ -30,7 +44,7 @@ public record PedidoResponseDTO(
                              BigDecimal cargoCancelacion, String motivoCancelacion) {
         this(id, clienteId, tiendaId, conductorId, direccionEnvio, estado, subtotal, costoEnvio,
                 comisionPlataforma, gananciaConductor, total, cargoCancelacion, motivoCancelacion,
-                BigDecimal.ZERO, 0L);
+                BigDecimal.ZERO, 0L, null);
     }
 
     public static PedidoResponseDTO desde(Pedido p) {
@@ -40,7 +54,8 @@ public record PedidoResponseDTO(
                 p.getComisionPlataforma(), p.getGananciaConductor(), p.getTotal(),
                 p.getCargoCancelacion(), p.getMotivoCancelacion(),
                 p.getDescuentoPuntos() != null ? p.getDescuentoPuntos() : BigDecimal.ZERO,
-                p.getPuntosCanjeados() != null ? p.getPuntosCanjeados() : 0L
+                p.getPuntosCanjeados() != null ? p.getPuntosCanjeados() : 0L,
+                p.getCreadoEn()
         );
     }
 }
