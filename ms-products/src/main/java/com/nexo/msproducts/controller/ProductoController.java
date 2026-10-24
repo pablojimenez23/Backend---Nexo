@@ -6,8 +6,12 @@ import com.nexo.msproducts.dto.ProductoResponseDTO;
 import com.nexo.msproducts.dto.ReservaStockResponseDTO;
 import com.nexo.msproducts.entity.Oferta;
 import com.nexo.msproducts.entity.Producto;
+import com.nexo.msproducts.entity.VarianteProducto;
 import com.nexo.msproducts.repository.ProductoRepository;
+import com.nexo.msproducts.repository.VarianteProductoRepository;
+import com.nexo.msproducts.service.CatalogoTipos;
 import com.nexo.msproducts.service.OfertaService;
+import com.nexo.msproducts.service.ProductoDetalleService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,8 +24,8 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/productos")
@@ -30,25 +34,34 @@ public class ProductoController {
     private final ProductoRepository productoRepository;
     private final TiendaClient tiendaClient;
     private final OfertaService ofertaService;
+    private final ProductoDetalleService detalle;
+    private final VarianteProductoRepository varianteRepository;
 
     @Value("${internal.api.key}")
     private String internalApiKey;
 
     public ProductoController(ProductoRepository productoRepository,
                               TiendaClient tiendaClient,
-                              OfertaService ofertaService) {
+                              OfertaService ofertaService,
+                              ProductoDetalleService detalle,
+                              VarianteProductoRepository varianteRepository) {
         this.productoRepository = productoRepository;
         this.tiendaClient = tiendaClient;
         this.ofertaService = ofertaService;
+        this.detalle = detalle;
+        this.varianteRepository = varianteRepository;
+    }
+
+    /** Tipos de producto y los datos que pide cada uno. La app arma el formulario con esto. */
+    @GetMapping("/tipos")
+    public List<CatalogoTipos.TipoInfo> tipos() {
+        return detalle.tipos();
     }
 
     @GetMapping
     public List<ProductoResponseDTO> listarPorTienda(@RequestParam UUID tiendaId) {
         Map<UUID, Oferta> ofertas = ofertaService.vigentesPorTienda(tiendaId, Instant.now());
-        return productoRepository.findByTiendaId(tiendaId)
-                .stream()
-                .map(p -> ProductoResponseDTO.desde(p, ofertas.get(p.getId())))
-                .collect(Collectors.toList());
+        return detalle.responderTodos(productoRepository.findByTiendaId(tiendaId), ofertas);
     }
 
     @GetMapping("/{id}")
@@ -56,10 +69,11 @@ public class ProductoController {
         Producto producto = productoRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado"));
         Oferta oferta = ofertaService.vigenteDe(id, Instant.now()).orElse(null);
-        return ProductoResponseDTO.desde(producto, oferta);
+        return detalle.responder(producto, oferta);
     }
 
     @PostMapping
+    @Transactional
     public ResponseEntity<ProductoResponseDTO> crear(
             @RequestBody ProductoRequestDTO request, JwtAuthenticationToken auth) {
 
@@ -71,17 +85,15 @@ public class ProductoController {
 
         Producto producto = new Producto();
         producto.setTiendaId(request.tiendaId());
-        producto.setNombre(request.nombre());
-        producto.setDescripcion(request.descripcion());
-        producto.setPrecio(request.precio());
-        producto.setStock(request.stock() != null ? request.stock() : 0);
-        producto.setDisponible(request.disponible() != null ? request.disponible() : true);
+        detalle.aplicar(producto, request, false);
 
         Producto guardado = productoRepository.save(producto);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ProductoResponseDTO.desde(guardado));
+        detalle.guardarHijos(guardado, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(detalle.responder(guardado, null));
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ResponseEntity<ProductoResponseDTO> editar(
             @PathVariable UUID id, @RequestBody ProductoRequestDTO request, JwtAuthenticationToken auth) {
 
@@ -93,17 +105,13 @@ public class ProductoController {
             verificarDueno(producto.getTiendaId(), ownerId);
         }
 
-        producto.setNombre(request.nombre());
-        producto.setDescripcion(request.descripcion());
-        producto.setPrecio(request.precio());
-        if (request.stock() != null) {
-            producto.setStock(request.stock());
-        }
-        if (request.disponible() != null) {
-            producto.setDisponible(request.disponible());
-        }
+        // La app antigua no manda variantes: si el producto ya las tiene, se respetan su precio y su stock
+        boolean variantesSinCambios = request.variantes() == null && detalle.tieneVariantes(id);
+        detalle.aplicar(producto, request, variantesSinCambios);
 
-        return ResponseEntity.ok(ProductoResponseDTO.desde(productoRepository.save(producto)));
+        Producto guardado = productoRepository.save(producto);
+        detalle.guardarHijos(guardado, request);
+        return ResponseEntity.ok(detalle.responder(guardado, null));
     }
 
     @PatchMapping("/{id}/disponibilidad")
@@ -114,10 +122,11 @@ public class ProductoController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado"));
 
         producto.setDisponible(disponible);
-        return ResponseEntity.ok(ProductoResponseDTO.desde(productoRepository.save(producto)));
+        return ResponseEntity.ok(detalle.responder(productoRepository.save(producto), null));
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<Void> eliminar(@PathVariable UUID id, JwtAuthenticationToken auth) {
         UUID ownerId = obtenerUserId(auth);
         Producto producto = productoRepository.findById(id)
@@ -126,11 +135,13 @@ public class ProductoController {
         if (!esAdmin(auth)) {
             verificarDueno(producto.getTiendaId(), ownerId);
         }
+        detalle.eliminarDe(id);
         productoRepository.delete(producto);
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/por-tienda/{tiendaId}")
+    @Transactional
     public ResponseEntity<Void> eliminarPorTienda(
             @PathVariable UUID tiendaId,
             @RequestHeader(value = "X-Internal-Key", required = false) String key) {
@@ -140,18 +151,21 @@ public class ProductoController {
         }
 
         List<Producto> productos = productoRepository.findByTiendaId(tiendaId);
+        detalle.eliminarDeProductos(productos.stream().map(Producto::getId).filter(Objects::nonNull).toList());
         productoRepository.deleteAll(productos);
         return ResponseEntity.noContent().build();
     }
 
     /**
      * Reserva stock de forma atómica y, si el producto tiene una oferta vigente, consume su cupo.
+     * Si el producto tiene variantes (tamaños), varianteId es obligatorio y el stock sale de esa variante.
      * La respuesta dice cuántas unidades se cobran a precio de oferta; el resto va a precio normal.
      */
     @PatchMapping("/{id}/reservar-stock")
     @Transactional
     public ResponseEntity<ReservaStockResponseDTO> reservarStock(
             @PathVariable UUID id, @RequestParam int cantidad,
+            @RequestParam(required = false) UUID varianteId,
             @RequestHeader(value = "X-Internal-Key", required = false) String key) {
 
         if (key == null || !key.equals(internalApiKey)) {
@@ -164,15 +178,33 @@ public class ProductoController {
         Producto producto = productoRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado"));
 
-        if (productoRepository.reservarStock(id, cantidad) == 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente");
+        if (!detalle.tieneVariantes(id)) {
+            if (varianteId != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Este producto no tiene opciones");
+            }
+            if (productoRepository.reservarStock(id, cantidad) == 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente");
+            }
+            return ResponseEntity.ok(ofertaService.aplicarOferta(producto, cantidad, Instant.now()));
         }
 
-        return ResponseEntity.ok(ofertaService.aplicarOferta(producto, cantidad, Instant.now()));
+        if (varianteId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Elegí una opción para este producto");
+        }
+        VarianteProducto variante = varianteRepository.findByIdAndProductoId(varianteId, id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "La opción elegida no existe"));
+
+        if (varianteRepository.reservarStock(varianteId, id, cantidad) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Stock insuficiente para la opción elegida");
+        }
+        productoRepository.descontarStockAgregado(id, cantidad);
+
+        return ResponseEntity.ok(ofertaService.aplicarOferta(producto, variante.getPrecio(), cantidad, Instant.now()));
     }
 
     /**
-     * Devuelve stock; si la reserva había usado cupo de una oferta, también lo devuelve.
+     * Devuelve stock (a la variante, si corresponde); si la reserva había usado cupo de una oferta,
+     * también lo devuelve.
      */
     @PatchMapping("/{id}/revertir-stock")
     @Transactional
@@ -180,6 +212,7 @@ public class ProductoController {
             @PathVariable UUID id, @RequestParam int cantidad,
             @RequestParam(required = false) UUID ofertaId,
             @RequestParam(defaultValue = "0") int unidadesOferta,
+            @RequestParam(required = false) UUID varianteId,
             @RequestHeader(value = "X-Internal-Key", required = false) String key) {
 
         if (key == null || !key.equals(internalApiKey)) {
@@ -189,7 +222,13 @@ public class ProductoController {
         productoRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado"));
 
-        productoRepository.revertirStock(id, cantidad);
+        if (varianteId == null) {
+            productoRepository.revertirStock(id, cantidad);
+        } else if (varianteRepository.revertirStock(varianteId, id, cantidad) > 0) {
+            // Si la variante ya fue borrada no hay a quién devolverle el stock
+            productoRepository.revertirStock(id, cantidad);
+        }
+
         ofertaService.devolverCupo(ofertaId, unidadesOferta);
         return ResponseEntity.ok().build();
     }

@@ -161,11 +161,18 @@ public class OfertaService {
     }
 
     /**
-     * Se llama justo después de reservar el stock. Consume cupo de la oferta vigente (hasta el límite
-     * por pedido) y dice cuántas unidades se cobran a precio de oferta. El resto va a precio normal.
+     * Se llama justo después de reservar el stock de un producto sin variantes.
+     * Consume cupo de la oferta vigente (hasta el límite por pedido) y dice cuántas unidades se cobran
+     * a precio de oferta. El resto va a precio normal.
      */
     @Transactional
     public ReservaStockResponseDTO aplicarOferta(Producto producto, int cantidad, Instant ahora) {
+        return aplicarOferta(producto, producto.getPrecio(), cantidad, ahora);
+    }
+
+    /** Igual que la anterior, pero el descuento se calcula sobre el precio de la variante elegida. */
+    @Transactional
+    public ReservaStockResponseDTO aplicarOferta(Producto producto, BigDecimal precioBase, int cantidad, Instant ahora) {
         Optional<Oferta> vigente = vigenteDe(producto.getId(), ahora);
         if (vigente.isEmpty()) {
             return SIN_OFERTA;
@@ -176,7 +183,7 @@ public class OfertaService {
         for (int unidades = Math.min(cantidad, oferta.getLimitePorPedido()); unidades >= 1; unidades--) {
             if (ofertas.consumirCupo(oferta.getId(), unidades, ahora, Oferta.Estado.ACTIVA) == 1) {
                 return new ReservaStockResponseDTO(
-                        oferta.getId(), oferta.precioSobre(producto.getPrecio()), unidades);
+                        oferta.getId(), oferta.precioSobre(precioBase), unidades);
             }
         }
         return SIN_OFERTA;

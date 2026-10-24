@@ -6,8 +6,13 @@ import com.nexo.msproducts.dto.ProductoResponseDTO;
 import com.nexo.msproducts.dto.ReservaStockResponseDTO;
 import com.nexo.msproducts.entity.Oferta;
 import com.nexo.msproducts.entity.Producto;
+import com.nexo.msproducts.repository.GrupoOpcionesRepository;
+import com.nexo.msproducts.repository.OpcionProductoRepository;
 import com.nexo.msproducts.repository.ProductoRepository;
+import com.nexo.msproducts.repository.VarianteProductoRepository;
+import com.nexo.msproducts.service.CatalogoTipos;
 import com.nexo.msproducts.service.OfertaService;
+import com.nexo.msproducts.service.ProductoDetalleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -36,6 +41,9 @@ class ProductoControllerTest {
     @Mock private ProductoRepository productoRepository;
     @Mock private TiendaClient tiendaClient;
     @Mock private OfertaService ofertaService;
+    @Mock private VarianteProductoRepository varianteRepository;
+    @Mock private GrupoOpcionesRepository grupoRepository;
+    @Mock private OpcionProductoRepository opcionRepository;
     @Mock private JwtAuthenticationToken auth;
     @Mock private Jwt jwt;
 
@@ -47,7 +55,9 @@ class ProductoControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new ProductoController(productoRepository, tiendaClient, ofertaService);
+        ProductoDetalleService detalle =
+                new ProductoDetalleService(varianteRepository, grupoRepository, opcionRepository, new CatalogoTipos());
+        controller = new ProductoController(productoRepository, tiendaClient, ofertaService, detalle, varianteRepository);
         ReflectionTestUtils.setField(controller, "internalApiKey", INTERNAL_KEY);
         lenient().when(auth.getPrincipal()).thenReturn(jwt);
     }
@@ -134,6 +144,7 @@ class ProductoControllerTest {
 
         assertNotNull(resultado);
         assertNull(resultado.oferta());
+        assertEquals("OTRO", resultado.tipo());
     }
 
     @Test
@@ -210,6 +221,23 @@ class ProductoControllerTest {
         verify(productoRepository).save(argThat(p -> p.getStock() == 0 && p.isDisponible()));
     }
 
+    @Test
+    void crear_precioInvalido_lanza400() {
+        simularUsuarioNormal(OWNER_ID);
+        when(tiendaClient.obtenerOwnerId(TIENDA_ID)).thenReturn(OWNER_ID);
+
+        ProductoRequestDTO sinPrecio = new ProductoRequestDTO(
+                TIENDA_ID, "Producto", "Desc", BigDecimal.ZERO, 5, true
+        );
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.crear(sinPrecio, auth)
+        );
+        assertEquals(400, excepcion.getStatusCode().value());
+        verify(productoRepository, never()).save(any());
+    }
+
     // ==================== editar ====================
 
     @Test
@@ -277,7 +305,7 @@ class ProductoControllerTest {
     // ==================== eliminar ====================
 
     @Test
-    void eliminar_dueñoReal_seElimina() {
+    void eliminar_dueñoReal_seEliminaConSusVariantes() {
         UUID id = UUID.randomUUID();
         Producto existente = crearProductoDePrueba();
 
@@ -289,6 +317,8 @@ class ProductoControllerTest {
 
         assertEquals(204, response.getStatusCode().value());
         verify(productoRepository).delete(existente);
+        verify(varianteRepository).deleteByProductoId(id);
+        verify(grupoRepository).deleteByProductoId(id);
     }
 
     @Test
@@ -339,7 +369,7 @@ class ProductoControllerTest {
         when(productoRepository.reservarStock(id, 3)).thenReturn(1);
         when(ofertaService.aplicarOferta(eq(producto), eq(3), any(Instant.class))).thenReturn(reserva);
 
-        ResponseEntity<ReservaStockResponseDTO> response = controller.reservarStock(id, 3, INTERNAL_KEY);
+        ResponseEntity<ReservaStockResponseDTO> response = controller.reservarStock(id, 3, null, INTERNAL_KEY);
 
         assertEquals(200, response.getStatusCode().value());
         assertEquals(ofertaId, response.getBody().ofertaId());
@@ -357,7 +387,7 @@ class ProductoControllerTest {
 
         ResponseStatusException excepcion = assertThrows(
                 ResponseStatusException.class,
-                () -> controller.reservarStock(id, 50, INTERNAL_KEY)
+                () -> controller.reservarStock(id, 50, null, INTERNAL_KEY)
         );
         assertEquals(409, excepcion.getStatusCode().value());
         verify(ofertaService, never()).aplicarOferta(any(), anyInt(), any());
@@ -369,7 +399,7 @@ class ProductoControllerTest {
 
         ResponseStatusException excepcion = assertThrows(
                 ResponseStatusException.class,
-                () -> controller.reservarStock(id, 0, INTERNAL_KEY)
+                () -> controller.reservarStock(id, 0, null, INTERNAL_KEY)
         );
         assertEquals(400, excepcion.getStatusCode().value());
         verify(productoRepository, never()).reservarStock(any(), anyInt());
@@ -382,7 +412,7 @@ class ProductoControllerTest {
 
         ResponseStatusException excepcion = assertThrows(
                 ResponseStatusException.class,
-                () -> controller.reservarStock(id, 1, INTERNAL_KEY)
+                () -> controller.reservarStock(id, 1, null, INTERNAL_KEY)
         );
         assertEquals(404, excepcion.getStatusCode().value());
     }
@@ -393,7 +423,7 @@ class ProductoControllerTest {
 
         assertThrows(
                 ResponseStatusException.class,
-                () -> controller.reservarStock(id, 1, "key-incorrecta")
+                () -> controller.reservarStock(id, 1, null, "key-incorrecta")
         );
         verify(productoRepository, never()).findById(any());
     }
@@ -406,7 +436,7 @@ class ProductoControllerTest {
 
         when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
 
-        controller.revertirStock(id, 5, null, 0, INTERNAL_KEY);
+        controller.revertirStock(id, 5, null, 0, null, INTERNAL_KEY);
 
         verify(productoRepository).revertirStock(id, 5);
         verify(ofertaService).devolverCupo(null, 0);
@@ -419,7 +449,7 @@ class ProductoControllerTest {
 
         when(productoRepository.findById(id)).thenReturn(Optional.of(crearProductoDePrueba()));
 
-        controller.revertirStock(id, 3, ofertaId, 2, INTERNAL_KEY);
+        controller.revertirStock(id, 3, ofertaId, 2, null, INTERNAL_KEY);
 
         verify(productoRepository).revertirStock(id, 3);
         verify(ofertaService).devolverCupo(ofertaId, 2);
@@ -431,7 +461,7 @@ class ProductoControllerTest {
 
         assertThrows(
                 ResponseStatusException.class,
-                () -> controller.revertirStock(id, 1, null, 0, "key-incorrecta")
+                () -> controller.revertirStock(id, 1, null, 0, null, "key-incorrecta")
         );
         verify(productoRepository, never()).revertirStock(any(), anyInt());
     }

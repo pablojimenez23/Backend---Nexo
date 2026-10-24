@@ -73,6 +73,13 @@
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
 
+		<!-- NUEVO: Jackson 2 para el JSON de opciones (Boot 4 trae Jackson 3 en tools.jackson) -->
+		<dependency>
+			<groupId>com.fasterxml.jackson.core</groupId>
+			<artifactId>jackson-databind</artifactId>
+			<version>2.19.2</version>
+		</dependency>
+
 		<!-- Mensajería: publicación de eventos en SNS -->
 		<dependency>
 			<groupId>software.amazon.awssdk</groupId>

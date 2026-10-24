@@ -1,5 +1,7 @@
 package com.nexo.msorders.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexo.msorders.client.ProductoClient;
 import com.nexo.msorders.client.PuntosClient;
 import com.nexo.msorders.client.TiendaClient;
@@ -27,7 +29,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -52,6 +57,10 @@ public class PedidoController {
 
     private static final Pattern PATRON_HORARIO =
             Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
+
+    private static final int MAX_NOTA = 140;
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final PedidoRepository pedidoRepository;
     private final ItemPedidoRepository itemPedidoRepository;
@@ -89,6 +98,22 @@ public class PedidoController {
         this.puntosClient = puntosClient;
     }
 
+    /** Un ítem del pedido ya validado: producto, tamaño elegido, opciones y nota. */
+    private record Linea(ProductoClient.ProductoDTO producto,
+                         ProductoClient.VarianteDTO variante,
+                         List<Elegida> opciones,
+                         String nota,
+                         int cantidad) {
+    }
+
+    /** Una opción elegida junto al nombre de su grupo ("Masa" -> "Delgada"). */
+    private record Elegida(String grupo, ProductoClient.OpcionDTO opcion) {
+    }
+
+    /** Lo que se reservó en ms-products, para poder devolverlo si el pedido no se concreta. */
+    private record Reserva(UUID productoId, UUID varianteId, int cantidad, UUID ofertaId, int unidadesOferta) {
+    }
+
     @PostMapping
     public ResponseEntity<PedidoResponseDTO> crear(
             @RequestBody CrearPedidoRequestDTO request,
@@ -108,24 +133,63 @@ public class PedidoController {
                     "Los puntos a canjear no pueden ser negativos");
         }
 
-        BigDecimal subtotal = BigDecimal.ZERO;
-        List<ItemPedido> items = new java.util.ArrayList<>();
+        if (request.items() == null || request.items().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "El pedido no tiene productos");
+        }
 
+        // Primero se valida todo (tamaño, opciones, tienda, edad) y recién después se reserva stock
+        List<Linea> lineas = new ArrayList<>();
         for (var itemReq : request.items()) {
-            var producto = productoClient.obtenerProducto(itemReq.productoId());
-            productoClient.reservarStock(itemReq.productoId(), itemReq.cantidad());
+            lineas.add(resolverLinea(itemReq, request.tiendaId()));
+        }
 
-            ItemPedido item = new ItemPedido();
-            item.setProductoId(itemReq.productoId());
-            item.setCantidad(itemReq.cantidad());
-            item.setPrecioUnitario(producto.precio());
-            items.add(item);
+        boolean llevaAlcohol = lineas.stream()
+                .anyMatch(l -> Boolean.TRUE.equals(l.producto().requiereMayorEdad()));
+        if (llevaAlcohol && !Boolean.TRUE.equals(request.confirmaMayorEdad())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Para comprar alcohol tenés que confirmar que sos mayor de 18 años");
+        }
 
-            subtotal = subtotal.add(producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad())));
+        BigDecimal subtotal = BigDecimal.ZERO;
+        List<ItemPedido> items = new ArrayList<>();
+        List<Reserva> reservas = new ArrayList<>();
+
+        try {
+            for (Linea linea : lineas) {
+                UUID varianteId = linea.variante() == null ? null : linea.variante().id();
+                var reserva = productoClient.reservarStock(linea.producto().id(), varianteId, linea.cantidad());
+
+                int enOferta = unidadesEnOferta(reserva, linea.cantidad());
+                reservas.add(new Reserva(linea.producto().id(), varianteId, linea.cantidad(),
+                        enOferta > 0 ? reserva.ofertaId() : null, enOferta));
+
+                BigDecimal precioBase = linea.variante() != null
+                        ? linea.variante().precio()
+                        : linea.producto().precio();
+                BigDecimal opcionesUnitario = linea.opciones().stream()
+                        .map(e -> e.opcion().precioAdicional() == null ? BigDecimal.ZERO : e.opcion().precioAdicional())
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                if (enOferta > 0) {
+                    BigDecimal unitario = reserva.precioOferta().add(opcionesUnitario);
+                    items.add(crearItem(linea, unitario, opcionesUnitario, enOferta));
+                    subtotal = subtotal.add(unitario.multiply(BigDecimal.valueOf(enOferta)));
+                }
+
+                int resto = linea.cantidad() - enOferta;
+                if (resto > 0) {
+                    BigDecimal unitario = precioBase.add(opcionesUnitario);
+                    items.add(crearItem(linea, unitario, opcionesUnitario, resto));
+                    subtotal = subtotal.add(unitario.multiply(BigDecimal.valueOf(resto)));
+                }
+            }
+        } catch (RuntimeException e) {
+            devolverReservas(reservas);
+            throw e;
         }
 
         if (tienda.montoMinimo() != null && subtotal.compareTo(tienda.montoMinimo()) < 0) {
-            devolverReservas(request);
+            devolverReservas(reservas);
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El pedido no alcanza el monto mínimo de la tienda: " + tienda.montoMinimo());
         }
@@ -138,13 +202,13 @@ public class PedidoController {
                     .min(subtotal);
 
             if (puntosACanjear < minimoCanje) {
-                devolverReservas(request);
+                devolverReservas(reservas);
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "El mínimo para pagar con puntos es de " + minimoCanje + " puntos");
             }
             if (descuentoPuntos.compareTo(tope) > 0) {
                 long maximoPuntos = tope.divide(pesosPorPuntoCanje, 0, RoundingMode.FLOOR).longValue();
-                devolverReservas(request);
+                devolverReservas(reservas);
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Solo podés pagar con puntos hasta el "
                                 + topeCanjePorcentaje.stripTrailingZeros().toPlainString()
@@ -160,7 +224,7 @@ public class PedidoController {
             try {
                 canjeId = puntosClient.canjear(clienteId, puntosACanjear);
             } catch (RuntimeException e) {
-                devolverReservas(request);
+                devolverReservas(reservas);
                 throw e;
             }
         }
@@ -196,6 +260,7 @@ public class PedidoController {
             if (canjeId != null) {
                 puntosClient.revertir(canjeId);
             }
+            devolverReservas(reservas);
             throw e;
         }
 
@@ -382,9 +447,174 @@ public class PedidoController {
         return Map.of("valido", valido);
     }
 
-    /** Devuelve el stock reservado cuando el pedido se rechaza antes de crearse. */
-    private void devolverReservas(CrearPedidoRequestDTO request) {
-        request.items().forEach(i -> productoClient.revertirStock(i.productoId(), i.cantidad()));
+    // ==================== helpers de creación ====================
+
+    /** Valida un ítem del pedido contra el producto real: tienda, disponibilidad, tamaño, opciones y nota. */
+    private Linea resolverLinea(CrearPedidoRequestDTO.ItemRequest itemReq, UUID tiendaId) {
+        if (itemReq.productoId() == null || itemReq.cantidad() == null || itemReq.cantidad() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "La cantidad de cada producto debe ser mayor a cero");
+        }
+
+        var producto = productoClient.obtenerProducto(itemReq.productoId());
+
+        if (producto.tiendaId() != null && !producto.tiendaId().equals(tiendaId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Un producto del pedido no pertenece a esta tienda");
+        }
+        if (Boolean.FALSE.equals(producto.disponible())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "\"" + producto.nombre() + "\" no está disponible en este momento");
+        }
+
+        List<ProductoClient.VarianteDTO> variantes = producto.variantes() == null ? List.of() : producto.variantes();
+        ProductoClient.VarianteDTO variante = null;
+        if (!variantes.isEmpty()) {
+            if (itemReq.varianteId() == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Elegí una opción de \"" + producto.nombre() + "\"");
+            }
+            variante = variantes.stream()
+                    .filter(v -> itemReq.varianteId().equals(v.id()))
+                    .findFirst()
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "La opción elegida no existe en \"" + producto.nombre() + "\""));
+            if (Boolean.FALSE.equals(variante.disponible())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "La opción \"" + variante.nombre() + "\" no está disponible en este momento");
+            }
+        } else if (itemReq.varianteId() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "\"" + producto.nombre() + "\" no tiene opciones para elegir");
+        }
+
+        List<Elegida> elegidas = validarOpciones(producto, itemReq.opcionesIds());
+        String nota = validarNota(itemReq.nota());
+
+        return new Linea(producto, variante, elegidas, nota, itemReq.cantidad());
+    }
+
+    /**
+     * Revisa las opciones elegidas contra los grupos del producto: que existan, que estén disponibles
+     * y que en cada grupo se respete el mínimo (obligatorio) y el máximo.
+     */
+    private List<Elegida> validarOpciones(ProductoClient.ProductoDTO producto, List<UUID> opcionesIds) {
+        List<ProductoClient.GrupoDTO> grupos = producto.grupos() == null ? List.of() : producto.grupos();
+        Set<UUID> pedidas = opcionesIds == null ? Set.of() : new LinkedHashSet<>(opcionesIds);
+
+        Map<UUID, Elegida> encontradas = new LinkedHashMap<>();
+        Map<UUID, Integer> porGrupo = new LinkedHashMap<>();
+        for (UUID opcionId : pedidas) {
+            Elegida elegida = null;
+            ProductoClient.GrupoDTO grupoDeOpcion = null;
+            for (ProductoClient.GrupoDTO grupo : grupos) {
+                List<ProductoClient.OpcionDTO> lista = grupo.opciones() == null ? List.of() : grupo.opciones();
+                for (ProductoClient.OpcionDTO opcion : lista) {
+                    if (opcionId != null && opcionId.equals(opcion.id())) {
+                        elegida = new Elegida(grupo.nombre(), opcion);
+                        grupoDeOpcion = grupo;
+                    }
+                }
+            }
+            if (elegida == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Una de las opciones elegidas no existe en \"" + producto.nombre() + "\"");
+            }
+            if (Boolean.FALSE.equals(elegida.opcion().disponible())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "La opción \"" + elegida.opcion().nombre() + "\" no está disponible en este momento");
+            }
+            encontradas.put(opcionId, elegida);
+            porGrupo.merge(grupoDeOpcion.id(), 1, Integer::sum);
+        }
+
+        for (ProductoClient.GrupoDTO grupo : grupos) {
+            int elegidasEnGrupo = porGrupo.getOrDefault(grupo.id(), 0);
+            int minimo = grupo.minimo() == null ? 0 : grupo.minimo();
+            int maximo = grupo.maximo() == null ? Integer.MAX_VALUE : grupo.maximo();
+            if (elegidasEnGrupo < minimo) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        minimo == 1
+                                ? "Elegí una opción en \"" + grupo.nombre() + "\""
+                                : "Elegí al menos " + minimo + " opciones en \"" + grupo.nombre() + "\"");
+            }
+            if (elegidasEnGrupo > maximo) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "En \"" + grupo.nombre() + "\" podés elegir hasta " + maximo);
+            }
+        }
+
+        // Se guardan en el orden de los grupos del producto, no en el orden en que llegaron
+        List<Elegida> ordenadas = new ArrayList<>();
+        for (ProductoClient.GrupoDTO grupo : grupos) {
+            for (Elegida e : encontradas.values()) {
+                if (grupo.nombre() != null && grupo.nombre().equals(e.grupo())) {
+                    ordenadas.add(e);
+                }
+            }
+        }
+        return ordenadas;
+    }
+
+    private static String validarNota(String nota) {
+        if (nota == null || nota.isBlank()) {
+            return null;
+        }
+        String limpia = nota.trim();
+        if (limpia.length() > MAX_NOTA) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "La nota puede tener hasta " + MAX_NOTA + " caracteres");
+        }
+        return limpia;
+    }
+
+    /** Cuántas unidades de la reserva se cobran a precio de oferta (0 si no hay oferta). */
+    private static int unidadesEnOferta(ProductoClient.ReservaDTO reserva, int cantidad) {
+        if (reserva == null || reserva.ofertaId() == null
+                || reserva.precioOferta() == null || reserva.unidadesEnOferta() == null) {
+            return 0;
+        }
+        return Math.min(Math.max(reserva.unidadesEnOferta(), 0), cantidad);
+    }
+
+    private ItemPedido crearItem(Linea linea, BigDecimal precioUnitario, BigDecimal opcionesUnitario, int cantidad) {
+        ItemPedido item = new ItemPedido();
+        item.setProductoId(linea.producto().id());
+        item.setNombreProducto(linea.producto().nombre());
+        if (linea.variante() != null) {
+            item.setVarianteId(linea.variante().id());
+            item.setVarianteNombre(linea.variante().nombre());
+        }
+        if (!linea.opciones().isEmpty()) {
+            item.setOpcionesDetalle(opcionesComoJson(linea.opciones()));
+            item.setOpcionesUnitario(opcionesUnitario);
+        }
+        item.setNota(linea.nota());
+        item.setCantidad(cantidad);
+        item.setPrecioUnitario(precioUnitario);
+        return item;
+    }
+
+    private static String opcionesComoJson(List<Elegida> opciones) {
+        List<Map<String, Object>> lista = new ArrayList<>();
+        for (Elegida elegida : opciones) {
+            Map<String, Object> dato = new LinkedHashMap<>();
+            dato.put("grupo", elegida.grupo());
+            dato.put("nombre", elegida.opcion().nombre());
+            dato.put("precio", elegida.opcion().precioAdicional() == null
+                    ? BigDecimal.ZERO : elegida.opcion().precioAdicional());
+            lista.add(dato);
+        }
+        try {
+            return MAPPER.writeValueAsString(lista);
+        } catch (JsonProcessingException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "No se pudieron guardar las opciones");
+        }
+    }
+
+    /** Devuelve el stock (y el cupo de oferta) reservado cuando el pedido se rechaza antes de crearse. */
+    private void devolverReservas(List<Reserva> reservas) {
+        reservas.forEach(r -> productoClient.revertirStock(
+                r.productoId(), r.varianteId(), r.cantidad(), r.ofertaId(), r.unidadesOferta()));
     }
 
     private PedidoResponseDTO avanzarEstado(UUID id, Pedido.Estado desde, Pedido.Estado hacia) {
