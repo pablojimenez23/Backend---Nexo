@@ -16,6 +16,11 @@ public record EventoPedido(
         BigDecimal total,
         List<Item> items) {
 
-    public record Item(UUID productoId, int cantidad) {
+    /** varianteId es null cuando el producto no tiene tamaños. */
+    public record Item(UUID productoId, int cantidad, UUID varianteId) {
+
+        public Item(UUID productoId, int cantidad) {
+            this(productoId, cantidad, null);
+        }
     }
 }

@@ -302,7 +302,7 @@ public class PedidoController {
         }
 
         List<EventoPedido.Item> items = itemPedidoRepository.findByPedidoId(pedido.getId()).stream()
-                .map(i -> new EventoPedido.Item(i.getProductoId(), i.getCantidad()))
+                .map(i -> new EventoPedido.Item(i.getProductoId(), i.getCantidad(), i.getVarianteId()))
                 .collect(Collectors.toList());
 
         pedido.getPago().setEstado(PagoSimulado.Estado.REFUNDED);

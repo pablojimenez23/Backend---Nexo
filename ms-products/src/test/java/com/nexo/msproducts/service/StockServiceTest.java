@@ -3,101 +3,130 @@ package com.nexo.msproducts.service;
 import com.nexo.msproducts.messaging.EventoPedido;
 import com.nexo.msproducts.repository.EventoProcesadoRepository;
 import com.nexo.msproducts.repository.ProductoRepository;
+import com.nexo.msproducts.repository.VarianteProductoRepository;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-/** Devolución de stock al cancelar un pedido, con idempotencia. Sin base de datos. */
+@ExtendWith(MockitoExtension.class)
 class StockServiceTest {
 
-    private static final UUID EVENTO_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
-    private static final UUID PEDIDO_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
-    private static final UUID PRODUCTO_A = UUID.fromString("44444444-4444-4444-4444-444444444444");
-    private static final UUID PRODUCTO_B = UUID.fromString("55555555-5555-5555-5555-555555555555");
+    @Mock private ProductoRepository productos;
+    @Mock private VarianteProductoRepository variantes;
+    @Mock private EventoProcesadoRepository procesados;
 
-    private ProductoRepository productos;
-    private EventoProcesadoRepository procesados;
-    private StockService servicio;
+    private StockService service;
 
     @BeforeEach
-    void preparar() {
-        productos = mock(ProductoRepository.class);
-        procesados = mock(EventoProcesadoRepository.class);
-        servicio = new StockService(productos, procesados);
-        when(procesados.registrar(anyString())).thenReturn(1);
+    void setUp() {
+        service = new StockService(productos, variantes, procesados);
     }
 
-    private EventoPedido evento(String nombre, List<EventoPedido.Item> items) {
-        return new EventoPedido(EVENTO_ID, nombre, PEDIDO_ID, null, null, null, null, BigDecimal.TEN, items);
-    }
-
-    @Test
-    @DisplayName("Pedido cancelado: devuelve el stock de cada item")
-    void cancelado_devuelveStockDeCadaItem() {
-        servicio.procesar(evento("pedido.cancelado", List.of(
-                new EventoPedido.Item(PRODUCTO_A, 2),
-                new EventoPedido.Item(PRODUCTO_B, 5))));
-
-        verify(productos).revertirStock(PRODUCTO_A, 2);
-        verify(productos).revertirStock(PRODUCTO_B, 5);
+    private EventoPedido evento(String nombre, UUID eventoId, List<EventoPedido.Item> items) {
+        return new EventoPedido(eventoId, nombre, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                null, null, new BigDecimal("10000"), items);
     }
 
     @Test
-    @DisplayName("Registra el evento como procesado con la clave stock:eventoId")
-    void registraElEvento() {
-        servicio.procesar(evento("pedido.cancelado", List.of(new EventoPedido.Item(PRODUCTO_A, 1))));
+    void procesar_eventoQueNoEsCancelacion_noHaceNada() {
+        service.procesar(evento("pedido.pagado", UUID.randomUUID(),
+                List.of(new EventoPedido.Item(UUID.randomUUID(), 1))));
 
-        verify(procesados).registrar("stock:" + EVENTO_ID);
+        verifyNoInteractions(procesados, productos, variantes);
     }
 
     @Test
-    @DisplayName("Evento duplicado: se ignora y no se devuelve el stock dos veces")
-    void eventoDuplicado_seIgnora() {
-        when(procesados.registrar(anyString())).thenReturn(0);
+    void procesar_eventoYaProcesado_noDevuelveStockDeNuevo() {
+        UUID eventoId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(0);
 
-        servicio.procesar(evento("pedido.cancelado", List.of(new EventoPedido.Item(PRODUCTO_A, 2))));
+        service.procesar(evento("pedido.cancelado", eventoId,
+                List.of(new EventoPedido.Item(UUID.randomUUID(), 2))));
 
-        verify(productos, never()).revertirStock(any(UUID.class), anyInt());
+        verifyNoInteractions(productos, variantes);
     }
 
     @Test
-    @DisplayName("Otros eventos (no cancelado) no hacen nada")
-    void otroEvento_noHaceNada() {
-        servicio.procesar(evento("pedido.pagado", List.of(new EventoPedido.Item(PRODUCTO_A, 2))));
+    void procesar_cancelacionSinItems_noDevuelveNada() {
+        UUID eventoId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(1);
 
-        verifyNoInteractions(productos, procesados);
+        service.procesar(evento("pedido.cancelado", eventoId, List.of()));
+
+        verifyNoInteractions(productos, variantes);
     }
 
     @Test
-    @DisplayName("Cancelado sin items: no hay stock que devolver")
-    void sinItems_noDevuelveNada() {
-        servicio.procesar(evento("pedido.cancelado", List.of()));
+    void procesar_productoSinTamano_devuelveElStockAlProducto() {
+        UUID eventoId = UUID.randomUUID();
+        UUID productoId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(1);
 
-        verify(productos, never()).revertirStock(any(UUID.class), anyInt());
+        service.procesar(evento("pedido.cancelado", eventoId,
+                List.of(new EventoPedido.Item(productoId, 3))));
+
+        verify(productos).revertirStock(productoId, 3);
+        verifyNoInteractions(variantes);
     }
 
     @Test
-    @DisplayName("Si falla la actualización, el error se propaga (se deshace la transacción y se reintenta)")
-    void falla_sePropaga() {
-        doThrow(new IllegalStateException("base de datos caída"))
-                .when(productos).revertirStock(any(UUID.class), anyInt());
+    void procesar_productoConTamano_devuelveElStockALaVarianteYAlProducto() {
+        UUID eventoId = UUID.randomUUID();
+        UUID productoId = UUID.randomUUID();
+        UUID varianteId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(1);
+        when(variantes.revertirStock(varianteId, productoId, 2)).thenReturn(1);
 
-        assertThrows(IllegalStateException.class, () -> servicio.procesar(
-                evento("pedido.cancelado", List.of(new EventoPedido.Item(PRODUCTO_A, 2)))));
+        service.procesar(evento("pedido.cancelado", eventoId,
+                List.of(new EventoPedido.Item(productoId, 2, varianteId))));
+
+        verify(variantes).revertirStock(varianteId, productoId, 2);
+        verify(productos).revertirStock(productoId, 2);
+    }
+
+    @Test
+    void procesar_varianteQueYaNoExiste_noTocaElStockDelProducto() {
+        UUID eventoId = UUID.randomUUID();
+        UUID productoId = UUID.randomUUID();
+        UUID varianteId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(1);
+        when(variantes.revertirStock(varianteId, productoId, 2)).thenReturn(0);
+
+        service.procesar(evento("pedido.cancelado", eventoId,
+                List.of(new EventoPedido.Item(productoId, 2, varianteId))));
+
+        verify(variantes).revertirStock(varianteId, productoId, 2);
+        verify(productos, never()).revertirStock(any(), anyInt());
+    }
+
+    @Test
+    void procesar_variosItems_devuelveCadaUnoPorSuCamino() {
+        UUID eventoId = UUID.randomUUID();
+        UUID sinTamano = UUID.randomUUID();
+        UUID conTamano = UUID.randomUUID();
+        UUID varianteId = UUID.randomUUID();
+        when(procesados.registrar("stock:" + eventoId)).thenReturn(1);
+        when(variantes.revertirStock(varianteId, conTamano, 1)).thenReturn(1);
+
+        service.procesar(evento("pedido.cancelado", eventoId, List.of(
+                new EventoPedido.Item(sinTamano, 4),
+                new EventoPedido.Item(conTamano, 1, varianteId))));
+
+        verify(productos).revertirStock(sinTamano, 4);
+        verify(variantes).revertirStock(varianteId, conTamano, 1);
+        verify(productos).revertirStock(conTamano, 1);
     }
 }
