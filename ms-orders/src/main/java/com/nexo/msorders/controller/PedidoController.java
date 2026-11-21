@@ -81,7 +81,7 @@ public class PedidoController {
     private BigDecimal topeCanjePorcentaje;
 
     /** Mínimo de puntos para poder pagar con puntos en un pedido. */
-    @Value("${nexo.puntos.minimo-canje:50}")
+    @Value("${nexo.puntos.minimo-canje:25}")
     private long minimoCanje;
 
     public PedidoController(PedidoRepository pedidoRepository,

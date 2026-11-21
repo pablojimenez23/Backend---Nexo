@@ -282,24 +282,60 @@ class ProductoControllerTest {
     // ==================== cambiarDisponibilidad ====================
 
     @Test
-    void cambiarDisponibilidad_productoExiste_actualiza() {
+    void cambiarDisponibilidad_dueñoReal_actualiza() {
         UUID id = UUID.randomUUID();
         Producto existente = crearProductoDePrueba();
 
+        simularUsuarioNormal(OWNER_ID);
         when(productoRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(tiendaClient.obtenerOwnerId(TIENDA_ID)).thenReturn(OWNER_ID);
         when(productoRepository.save(any(Producto.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        controller.cambiarDisponibilidad(id, false);
+        controller.cambiarDisponibilidad(id, false, auth);
 
         assertFalse(existente.isDisponible());
     }
 
     @Test
+    void cambiarDisponibilidad_noEsElDueño_lanza403SinGuardar() {
+        UUID id = UUID.randomUUID();
+        Producto existente = crearProductoDePrueba();
+
+        simularUsuarioNormal(UUID.randomUUID());
+        when(productoRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(tiendaClient.obtenerOwnerId(TIENDA_ID)).thenReturn(OWNER_ID);
+
+        ResponseStatusException excepcion = assertThrows(
+                ResponseStatusException.class,
+                () -> controller.cambiarDisponibilidad(id, false, auth)
+        );
+        assertEquals(403, excepcion.getStatusCode().value());
+        assertTrue(existente.isDisponible());
+        verify(productoRepository, never()).save(any(Producto.class));
+    }
+
+    @Test
+    void cambiarDisponibilidad_comoAdmin_noVerificaDueño() {
+        UUID id = UUID.randomUUID();
+        Producto existente = crearProductoDePrueba();
+
+        simularAdmin();
+        when(productoRepository.findById(id)).thenReturn(Optional.of(existente));
+        when(productoRepository.save(any(Producto.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        controller.cambiarDisponibilidad(id, false, auth);
+
+        assertFalse(existente.isDisponible());
+        verify(tiendaClient, never()).obtenerOwnerId(any());
+    }
+
+    @Test
     void cambiarDisponibilidad_productoNoExiste_lanza404() {
         UUID id = UUID.randomUUID();
+        simularUsuarioNormal(OWNER_ID);
         when(productoRepository.findById(id)).thenReturn(Optional.empty());
 
-        assertThrows(ResponseStatusException.class, () -> controller.cambiarDisponibilidad(id, true));
+        assertThrows(ResponseStatusException.class, () -> controller.cambiarDisponibilidad(id, true, auth));
     }
 
     // ==================== eliminar ====================

@@ -115,11 +115,17 @@ public class ProductoController {
     }
 
     @PatchMapping("/{id}/disponibilidad")
+    @Transactional
     public ResponseEntity<ProductoResponseDTO> cambiarDisponibilidad(
-            @PathVariable UUID id, @RequestParam boolean disponible) {
+            @PathVariable UUID id, @RequestParam boolean disponible, JwtAuthenticationToken auth) {
 
+        UUID ownerId = obtenerUserId(auth);
         Producto producto = productoRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado"));
+
+        if (!esAdmin(auth)) {
+            verificarDueno(producto.getTiendaId(), ownerId);
+        }
 
         producto.setDisponible(disponible);
         return ResponseEntity.ok(detalle.responder(productoRepository.save(producto), null));

@@ -63,3 +63,7 @@ nexo:
           - queue: nexo-stock
             eventos:
               - pedido.cancelado
+  kinesis:
+    region: us-east-1
+    shards: 1
+    streams: nexo-pedidos-stream    # productor: ms-orders (eventos del pedido, solo identificadores)
