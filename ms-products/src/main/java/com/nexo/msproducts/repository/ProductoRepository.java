@@ -24,6 +24,15 @@ public interface ProductoRepository extends JpaRepository<Producto, UUID> {
     int reservarStock(@Param("id") UUID id, @Param("cantidad") int cantidad);
 
     /**
+     * Para productos con variantes: la variante ya validó el stock, acá solo se mantiene al día
+     * el total del producto. Nunca deja el stock en negativo.
+     */
+    @Modifying
+    @Query("UPDATE Producto p SET p.stock = CASE WHEN p.stock >= :cantidad THEN p.stock - :cantidad ELSE 0 END " +
+           "WHERE p.id = :id")
+    void descontarStockAgregado(@Param("id") UUID id, @Param("cantidad") int cantidad);
+
+    /**
      * Devuelve stock al producto — se usa cuando ms-orders cancela un pedido
      * y hay que revertir la reserva hecha antes.
      */

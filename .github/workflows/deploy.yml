@@ -7,7 +7,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  ECR_REGISTRY: 103158825723.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REGISTRY: 336876404393.dkr.ecr.us-east-1.amazonaws.com
 
 jobs:
   build-and-push:
