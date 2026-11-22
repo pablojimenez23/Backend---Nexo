@@ -1,6 +1,7 @@
 package com.nexo.msorders.controller;
 
 import com.nexo.msorders.client.ProductoClient;
+import com.nexo.msorders.client.PuntosClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
 import com.nexo.msorders.dto.CrearPedidoRequestDTO;
@@ -13,6 +14,7 @@ import com.nexo.msorders.messaging.EventoPublisher;
 import com.nexo.msorders.repository.ItemPedidoRepository;
 import com.nexo.msorders.repository.PedidoRepository;
 import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,7 +25,9 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +49,8 @@ public class PedidoController {
     private static final Set<Pedido.Estado> CANCELABLES_SIN_CARGO =
             EnumSet.of(Pedido.Estado.CREATED, Pedido.Estado.PAID);
 
+    private static final ZoneId ZONA_CHILE = ZoneId.of("America/Santiago");
+
     private static final Pattern PATRON_HORARIO =
             Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)\\s*-\\s*([01]?\\d|2[0-3]):([0-5]\\d)$");
 
@@ -56,6 +62,13 @@ public class PedidoController {
 
     @Value("${internal.api.key}")
     private String internalApiKey;
+
+    @Autowired
+    private PuntosClient puntosClient;
+
+    /** Cuántos pesos vale un punto al pagar productos con puntos (1 punto = $10). */
+    @Value("${nexo.puntos.pesos-por-punto-canje:10}")
+    private BigDecimal pesosPorPuntoCanje;
 
     public PedidoController(PedidoRepository pedidoRepository,
                              ItemPedidoRepository itemPedidoRepository,
@@ -83,6 +96,8 @@ public class PedidoController {
         }
 
         BigDecimal subtotal = BigDecimal.ZERO;
+        BigDecimal descuentoPuntos = BigDecimal.ZERO;
+        long puntosACanjear = 0;
         List<ItemPedido> items = new java.util.ArrayList<>();
 
         for (var itemReq : request.items()) {
@@ -95,7 +110,13 @@ public class PedidoController {
             item.setPrecioUnitario(producto.precio());
             items.add(item);
 
-            subtotal = subtotal.add(producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad())));
+            BigDecimal valorLinea = producto.precio().multiply(BigDecimal.valueOf(itemReq.cantidad()));
+            subtotal = subtotal.add(valorLinea);
+
+            if (Boolean.TRUE.equals(itemReq.canjearConPuntos())) {
+                descuentoPuntos = descuentoPuntos.add(valorLinea);
+                puntosACanjear += puntosPara(valorLinea);
+            }
         }
 
         if (tienda.montoMinimo() != null && subtotal.compareTo(tienda.montoMinimo()) < 0) {
@@ -104,7 +125,17 @@ public class PedidoController {
         }
 
         BigDecimal comision = subtotal.multiply(PORCENTAJE_COMISION);
-        BigDecimal total = subtotal.add(COSTO_ENVIO);
+        BigDecimal total = subtotal.add(COSTO_ENVIO).subtract(descuentoPuntos);
+
+        UUID canjeId = null;
+        if (puntosACanjear > 0) {
+            try {
+                canjeId = puntosClient.canjear(clienteId, puntosACanjear);
+            } catch (RuntimeException e) {
+                request.items().forEach(i -> productoClient.revertirStock(i.productoId(), i.cantidad()));
+                throw e;
+            }
+        }
 
         PagoSimulado pago = new PagoSimulado();
         pago.setProveedor("SIMULADO");
@@ -121,10 +152,24 @@ public class PedidoController {
         pedido.setGananciaConductor(COSTO_ENVIO.subtract(MARGEN_PLATAFORMA_ENVIO));
         pedido.setTotal(total);
         pedido.setPago(pago);
+        if (canjeId != null) {
+            pedido.setDescuentoPuntos(descuentoPuntos);
+            pedido.setPuntosCanjeados(puntosACanjear);
+            pedido.setCanjeId(canjeId);
+        }
 
-        Pedido guardado = pedidoRepository.save(pedido);
-        items.forEach(item -> item.setPedido(guardado));
-        itemPedidoRepository.saveAll(items);
+        Pedido guardado;
+        try {
+            guardado = pedidoRepository.save(pedido);
+            Pedido pedidoGuardado = guardado;
+            items.forEach(item -> item.setPedido(pedidoGuardado));
+            itemPedidoRepository.saveAll(items);
+        } catch (RuntimeException e) {
+            if (canjeId != null) {
+                puntosClient.revertir(canjeId);
+            }
+            throw e;
+        }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(PedidoResponseDTO.desde(guardado));
     }
@@ -157,7 +202,7 @@ public class PedidoController {
         } else if (pedido.getEstado() == Pedido.Estado.READY) {
             BigDecimal cargo = pedido.getSubtotal().multiply(PORCENTAJE_CARGO_CANCELACION);
             pedido.setCargoCancelacion(cargo);
-            pedido.getPago().setMontoReembolsado(pedido.getTotal().subtract(cargo));
+            pedido.getPago().setMontoReembolsado(pedido.getTotal().subtract(cargo).max(BigDecimal.ZERO));
         } else {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "El pedido ya no admite cancelación en su estado actual");
@@ -172,6 +217,10 @@ public class PedidoController {
         pedido.setMotivoCancelacion(request.motivo());
 
         Pedido guardado = pedidoRepository.save(pedido);
+
+        if (guardado.getCanjeId() != null) {
+            puntosClient.revertir(guardado.getCanjeId());
+        }
 
         PedidoResponseDTO dto = PedidoResponseDTO.desde(guardado);
         eventos.publicar(EventoPedido.de("pedido.cancelado", dto, null, items));
@@ -305,6 +354,11 @@ public class PedidoController {
         return Map.of("valido", valido);
     }
 
+    /** Puntos que cuesta pagar con puntos un monto en pesos (redondeo hacia arriba). */
+    private long puntosPara(BigDecimal montoPesos) {
+        return montoPesos.divide(pesosPorPuntoCanje, 0, RoundingMode.CEILING).longValueExact();
+    }
+
     private PedidoResponseDTO avanzarEstado(UUID id, Pedido.Estado desde, Pedido.Estado hacia) {
         Pedido pedido = pedidoRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido no encontrado"));
@@ -347,7 +401,7 @@ public class PedidoController {
 
         LocalTime inicio = LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)));
         LocalTime fin = LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
-        LocalTime ahora = LocalTime.now();
+        LocalTime ahora = LocalTime.now(ZONA_CHILE);
 
         if (fin.isAfter(inicio)) {
             return !ahora.isBefore(inicio) && ahora.isBefore(fin);

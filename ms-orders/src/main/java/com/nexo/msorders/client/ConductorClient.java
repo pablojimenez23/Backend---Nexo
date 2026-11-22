@@ -9,7 +9,7 @@ import java.util.List;
 @Component
 public class ConductorClient {
 
-    private final RestClient restClient = RestClient.create("http://localhost:8081");
+    private final RestClient restClient = RestClient.create(System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-306620137.us-east-1.elb.amazonaws.com") + "");
 
     @Value("${internal.api.key}")
     private String internalApiKey;
