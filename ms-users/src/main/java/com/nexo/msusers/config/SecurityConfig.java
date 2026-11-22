@@ -30,7 +30,11 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .requestMatchers(HttpMethod.POST, "/notificaciones/internal").permitAll()
+                .requestMatchers(HttpMethod.POST, "/admin/login").permitAll()
+                // Canje de puntos: lo llama ms-orders con X-Internal-Key (la clave se valida en el controller)
+                .requestMatchers(HttpMethod.POST, "/puntos/internal/**").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())));
@@ -40,7 +44,12 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("http://localhost:*", "http://192.168.0.9:*", "exp://*"));
+        config.setAllowedOriginPatterns(List.of(
+                "http://localhost:*",
+                "http://192.168.0.9:*",
+                "exp://*",
+                "http://nexo-panel-admin.s3-website-us-east-1.amazonaws.com"
+        ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);

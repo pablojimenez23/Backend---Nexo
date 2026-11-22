@@ -37,12 +37,23 @@ public class UsuarioController {
         String nombre = jwt.getClaimAsString("name");
         String picture = jwt.getClaimAsString("picture");
 
-        if (email == null) {
+        System.out.println("DEBUG === /usuarios/me ===");
+        System.out.println("DEBUG JWT claims completos: " + jwt.getClaims());
+        System.out.println("DEBUG email del JWT: " + email);
+        System.out.println("DEBUG nombre del JWT: " + nombre);
+        System.out.println("DEBUG picture del JWT: " + picture);
+
+        // Si falta cualquiera de los 3 (no solo el email), consultamos el endpoint userInfo de Cognito.
+        // El Access Token normalmente no trae "name"/"picture", solo el ID Token los incluye.
+        if (email == null || nombre == null || picture == null) {
             Map<String, Object> userInfo = userInfoClient.obtenerUserInfo(jwt.getTokenValue());
-            email = (String) userInfo.get("email");
-            nombre = (String) userInfo.get("name");
-            picture = (String) userInfo.get("picture");
+            System.out.println("DEBUG userInfo completo desde Cognito: " + userInfo);
+            if (email == null) email = (String) userInfo.get("email");
+            if (nombre == null) nombre = (String) userInfo.get("name");
+            if (picture == null) picture = (String) userInfo.get("picture");
         }
+
+        System.out.println("DEBUG valores finales -> email: " + email + ", nombre: " + nombre + ", picture: " + picture);
 
         if (email == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
