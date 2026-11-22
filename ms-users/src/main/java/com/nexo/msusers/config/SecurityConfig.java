@@ -49,7 +49,7 @@ public class SecurityConfig {
                 "http://192.168.0.9:*",
                 "exp://*",
                 "http://nexo-panel-admin.s3-website-us-east-1.amazonaws.com",
-                "http://nexo-panel-103158825723.s3-website-us-east-1.amazonaws.com"
+                "http://nexo-panel-336876404393.s3-website-us-east-1.amazonaws.com"
         ));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
