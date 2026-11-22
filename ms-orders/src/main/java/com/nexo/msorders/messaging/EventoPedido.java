@@ -23,7 +23,12 @@ public record EventoPedido(
         List<Item> items,
         Instant ocurridoEn) {
 
-    public record Item(UUID productoId, int cantidad) {
+    /** varianteId es null cuando el producto no tiene tamaños. */
+    public record Item(UUID productoId, int cantidad, UUID varianteId) {
+
+        public Item(UUID productoId, int cantidad) {
+            this(productoId, cantidad, null);
+        }
     }
 
     public static EventoPedido de(String evento, PedidoResponseDTO p, UUID ownerId, List<Item> items) {
@@ -48,7 +53,8 @@ public record EventoPedido(
             Item it = items.get(i);
             if (i > 0) sb.append(',');
             sb.append("{\"productoId\":").append(q(it.productoId()))
-              .append(",\"cantidad\":").append(it.cantidad()).append('}');
+              .append(",\"cantidad\":").append(it.cantidad())
+              .append(",\"varianteId\":").append(q(it.varianteId())).append('}');
         }
         sb.append("]}");
         return sb.toString();

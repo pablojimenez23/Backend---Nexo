@@ -13,7 +13,7 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_ZoKCVBrHG
+          issuer-uri: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_EYojXfQIG
 
 management:
   endpoints:
@@ -63,3 +63,7 @@ nexo:
           - queue: nexo-stock
             eventos:
               - pedido.cancelado
+  kinesis:
+    region: us-east-1
+    shards: 1
+    streams: nexo-pedidos-stream    # productor: ms-orders (eventos del pedido, solo identificadores)

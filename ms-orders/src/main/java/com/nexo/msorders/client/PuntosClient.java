@@ -19,7 +19,7 @@ public class PuntosClient {
     private static final Logger log = LoggerFactory.getLogger(PuntosClient.class);
 
     private final RestClient restClient = RestClient.create(
-            System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-306620137.us-east-1.elb.amazonaws.com"));
+            System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-1370249593.us-east-1.elb.amazonaws.com"));
 
     @Value("${internal.api.key}")
     private String internalApiKey;

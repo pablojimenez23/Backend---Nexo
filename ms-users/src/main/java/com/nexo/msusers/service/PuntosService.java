@@ -19,7 +19,7 @@ public class PuntosService {
     private final MovimientoPuntosRepository movimientos;
     private final EventoProcesadoRepository procesados;
 
-    @Value("${nexo.puntos.pesos-por-punto:100}")
+    @Value("${nexo.puntos.pesos-por-punto:1000}")
     private long pesosPorPunto;
 
     public PuntosService(MovimientoPuntosRepository movimientos, EventoProcesadoRepository procesados) {

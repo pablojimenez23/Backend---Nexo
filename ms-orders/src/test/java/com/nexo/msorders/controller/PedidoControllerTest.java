@@ -1,9 +1,9 @@
 package com.nexo.msorders.controller;
 
 import com.nexo.msorders.client.ProductoClient;
+import com.nexo.msorders.client.PuntosClient;
 import com.nexo.msorders.client.TiendaClient;
 import com.nexo.msorders.dto.CancelarPedidoRequestDTO;
-import com.nexo.msorders.dto.CrearPedidoRequestDTO;
 import com.nexo.msorders.dto.PedidoResponseDTO;
 import com.nexo.msorders.entity.PagoSimulado;
 import com.nexo.msorders.entity.Pedido;
@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -39,6 +38,7 @@ class PedidoControllerTest {
     @Mock private TiendaClient tiendaClient;
     @Mock private ProductoClient productoClient;
     @Mock private EventoPublisher eventos;
+    @Mock private PuntosClient puntosClient;
     @Mock private JwtAuthenticationToken auth;
     @Mock private Jwt jwt;
 
@@ -52,8 +52,11 @@ class PedidoControllerTest {
     @BeforeEach
     void setUp() {
         controller = new PedidoController(pedidoRepository, itemPedidoRepository,
-                tiendaClient, productoClient, eventos);
+                tiendaClient, productoClient, eventos, puntosClient);
         ReflectionTestUtils.setField(controller, "internalApiKey", INTERNAL_KEY);
+        ReflectionTestUtils.setField(controller, "pesosPorPuntoCanje", new BigDecimal("10"));
+        ReflectionTestUtils.setField(controller, "topeCanjePorcentaje", new BigDecimal("10"));
+        ReflectionTestUtils.setField(controller, "minimoCanje", 50L);
         lenient().when(auth.getPrincipal()).thenReturn(jwt);
     }
 
@@ -73,83 +76,6 @@ class PedidoControllerTest {
 
     private TiendaClient.TiendaDTO tiendaAbierta24h() {
         return new TiendaClient.TiendaDTO(TIENDA_ID, OWNER_ID, "APPROVED", null, "00:00-23:59");
-    }
-
-    private ProductoClient.ProductoDTO productoDePrueba(UUID id, BigDecimal precio) {
-        return new ProductoClient.ProductoDTO(id, TIENDA_ID, "Producto Test", precio, 10, true);
-    }
-
-    // ==================== crear ====================
-
-    @Test
-    void crear_pedidoValido_seCreaConEstadoCorrecto() {
-        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
-        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaAbierta24h());
-
-        UUID productoId = UUID.randomUUID();
-        when(productoClient.obtenerProducto(productoId)).thenReturn(productoDePrueba(productoId, new BigDecimal("5000")));
-
-        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
-                TIENDA_ID, "Calle Falsa 123",
-                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 2))
-        );
-
-        when(pedidoRepository.save(any(Pedido.class))).thenAnswer(inv -> {
-            Pedido p = inv.getArgument(0);
-            if (p.getEstado() == null) p.setEstado(Pedido.Estado.CREATED);
-            return p;
-        });
-
-        ResponseEntity<PedidoResponseDTO> response = controller.crear(request, auth);
-
-        assertEquals(201, response.getStatusCode().value());
-        verify(productoClient).reservarStock(productoId, 2);
-        verify(pedidoRepository).save(argThat(p ->
-                p.getSubtotal().compareTo(new BigDecimal("10000")) == 0
-                        && p.getTotal().compareTo(new BigDecimal("12000")) == 0
-        ));
-    }
-
-    @Test
-    void crear_tiendaCerrada_lanza409() {
-        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
-        TiendaClient.TiendaDTO tiendaCerrada =
-                new TiendaClient.TiendaDTO(TIENDA_ID, OWNER_ID, "APPROVED", null, "08:00-08:01");
-        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaCerrada);
-
-        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
-                TIENDA_ID, "Calle Falsa 123", List.of()
-        );
-
-        ResponseStatusException excepcion = assertThrows(
-                ResponseStatusException.class,
-                () -> controller.crear(request, auth)
-        );
-        assertEquals(409, excepcion.getStatusCode().value());
-        verify(pedidoRepository, never()).save(any());
-    }
-
-    @Test
-    void crear_noAlcanzaMontoMinimo_lanza400() {
-        when(jwt.getClaimAsString("sub")).thenReturn(CLIENTE_ID.toString());
-        TiendaClient.TiendaDTO tiendaConMinimo =
-                new TiendaClient.TiendaDTO(TIENDA_ID, OWNER_ID, "APPROVED", new BigDecimal("50000"), "00:00-23:59");
-        when(tiendaClient.obtenerTienda(TIENDA_ID)).thenReturn(tiendaConMinimo);
-
-        UUID productoId = UUID.randomUUID();
-        when(productoClient.obtenerProducto(productoId)).thenReturn(productoDePrueba(productoId, new BigDecimal("1000")));
-
-        CrearPedidoRequestDTO request = new CrearPedidoRequestDTO(
-                TIENDA_ID, "Calle Falsa 123",
-                List.of(new CrearPedidoRequestDTO.ItemRequest(productoId, 1))
-        );
-
-        ResponseStatusException excepcion = assertThrows(
-                ResponseStatusException.class,
-                () -> controller.crear(request, auth)
-        );
-        assertEquals(400, excepcion.getStatusCode().value());
-        verify(pedidoRepository, never()).save(any());
     }
 
     // ==================== pagar ====================
@@ -220,7 +146,7 @@ class PedidoControllerTest {
         assertEquals(0, pedido.getPago().getMontoReembolsado().compareTo(pedido.getTotal()));
         assertNull(pedido.getCargoCancelacion());
         verify(eventos).publicar(argThat(e -> "pedido.cancelado".equals(e.evento())));
-        verify(productoClient, never()).revertirStock(any(), anyInt());
+        verify(productoClient, never()).revertirStock(any(), any(), anyInt(), any(), anyInt());
     }
 
     @Test

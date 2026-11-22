@@ -78,6 +78,7 @@ public class EventoPedidoLector {
                 throw new MensajeInvalidoException("Cada item debe ser un objeto");
             }
             UUID productoId = uuid(item, "productoId", true);
+            UUID varianteId = uuid(item, "varianteId", false);
             Object cant = item.get("cantidad");
             if (!(cant instanceof BigDecimal bd)) {
                 throw new MensajeInvalidoException("La cantidad del item debe ser numérica");
@@ -91,7 +92,7 @@ public class EventoPedidoLector {
             if (cantidad <= 0) {
                 throw new MensajeInvalidoException("La cantidad del item debe ser mayor a 0");
             }
-            resultado.add(new EventoPedido.Item(productoId, cantidad));
+            resultado.add(new EventoPedido.Item(productoId, cantidad, varianteId));
         }
         return resultado;
     }

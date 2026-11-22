@@ -2,7 +2,6 @@ package com.nexo.msusers.service;
 
 import com.nexo.msusers.entity.CanjePuntos;
 import com.nexo.msusers.repository.CanjePuntosRepository;
-import com.nexo.msusers.repository.MovimientoPuntosRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,31 +24,34 @@ class CanjeServiceTest {
 
     private static final UUID CLIENTE = UUID.fromString("33333333-3333-3333-3333-333333333333");
 
-    private MovimientoPuntosRepository movimientos;
     private CanjePuntosRepository canjes;
+    private SaldoPuntosService saldos;
     private CanjeService servicio;
 
     @BeforeEach
     void preparar() {
-        movimientos = mock(MovimientoPuntosRepository.class);
         canjes = mock(CanjePuntosRepository.class);
-        servicio = new CanjeService(movimientos, canjes);
+        saldos = mock(SaldoPuntosService.class);
+        servicio = new CanjeService(canjes, saldos);
         when(canjes.save(any(CanjePuntos.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
+    private void saldo(long disponible, long vencidos) {
+        when(saldos.calcular(CLIENTE))
+                .thenReturn(new SaldoPuntosService.Saldo(disponible, vencidos, 0L, null, 0L));
+    }
+
     @Test
-    @DisplayName("Saldo disponible = puntos acumulados - canjes vigentes")
-    void saldo_restaCanjesVigentes() {
-        when(movimientos.saldoDe(CLIENTE)).thenReturn(101L);
-        when(canjes.totalActivoDe(CLIENTE)).thenReturn(40L);
+    @DisplayName("Saldo disponible = lo que informa el cálculo con vencimiento")
+    void saldo_usaElCalculoConVencimiento() {
+        saldo(61L, 0L);
         assertEquals(61L, servicio.saldoDisponible(CLIENTE));
     }
 
     @Test
     @DisplayName("Canje con saldo suficiente: guarda el canje por los puntos pedidos")
     void canjear_conSaldo_guarda() {
-        when(movimientos.saldoDe(CLIENTE)).thenReturn(101L);
-        when(canjes.totalActivoDe(CLIENTE)).thenReturn(0L);
+        saldo(101L, 0L);
 
         CanjePuntos canje = servicio.canjear(CLIENTE, 60L);
 
@@ -60,8 +62,19 @@ class CanjeServiceTest {
     @Test
     @DisplayName("Canje sin saldo suficiente: 409 y no se guarda nada")
     void canjear_sinSaldo_conflicto() {
-        when(movimientos.saldoDe(CLIENTE)).thenReturn(50L);
-        when(canjes.totalActivoDe(CLIENTE)).thenReturn(0L);
+        saldo(50L, 0L);
+
+        ResponseStatusException e = assertThrows(ResponseStatusException.class,
+                () -> servicio.canjear(CLIENTE, 60L));
+
+        assertEquals(HttpStatus.CONFLICT, e.getStatusCode());
+        verify(canjes, never()).save(any(CanjePuntos.class));
+    }
+
+    @Test
+    @DisplayName("Puntos vencidos no se pueden canjear: 409 y no se guarda nada")
+    void canjear_puntosVencidos_conflicto() {
+        saldo(0L, 100L);
 
         ResponseStatusException e = assertThrows(ResponseStatusException.class,
                 () -> servicio.canjear(CLIENTE, 60L));

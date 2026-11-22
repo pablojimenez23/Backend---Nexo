@@ -12,7 +12,7 @@
 	<artifactId>ms-queues</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>ms-queues</name>
-	<description>Administración de colas SQS y topics SNS</description>
+	<description>Administración de colas SQS, topics SNS y streams de Kinesis</description>
 	<properties>
 		<java.version>17</java.version>
 		<spring-cloud-aws.version>4.0.0</spring-cloud-aws.version>
@@ -59,6 +59,11 @@
 		<dependency>
 			<groupId>software.amazon.awssdk</groupId>
 			<artifactId>sns</artifactId>
+		</dependency>
+		<!-- NUEVO: administración de streams de Kinesis -->
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>kinesis</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>software.amazon.awssdk</groupId>
