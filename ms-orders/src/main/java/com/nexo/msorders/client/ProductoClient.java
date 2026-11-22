@@ -18,7 +18,7 @@ public class ProductoClient {
 
     private static final ReservaDTO SIN_OFERTA = new ReservaDTO(null, null, 0);
 
-    private final RestClient restClient = RestClient.create(System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-306620137.us-east-1.elb.amazonaws.com") + "/products");
+    private final RestClient restClient = RestClient.create(System.getenv().getOrDefault("ALB_URL", "http://nexo-alb-1370249593.us-east-1.elb.amazonaws.com") + "/products");
 
     @Value("${internal.api.key}")
     private String internalApiKey;
