@@ -30,6 +30,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                .requestMatchers(org.springframework.http.HttpMethod.GET, "/pedidos/*/verificar-completado").permitAll() // interno: se valida con X-Internal-Key
                 .anyRequest().authenticated() // ms-orders no tiene rutas públicas: todo requiere JWT
             )
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())));
