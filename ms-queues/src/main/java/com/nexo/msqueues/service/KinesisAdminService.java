@@ -15,7 +15,9 @@ import software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException;
 import software.amazon.awssdk.services.kinesis.model.Shard;
 import software.amazon.awssdk.services.kinesis.model.ShardIteratorType;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 
 /**
@@ -50,7 +52,7 @@ public class KinesisAdminService {
         return kinesis.listStreams().streamNames();
     }
 
-    /** Lee hasta 'limite' registros, desde los más antiguos que conserva el stream, sin consumirlos. */
+    /** Lee los últimos 'limite' registros que conserva el stream (los más recientes primero), sin consumirlos. */
     public List<RegistroKinesis> leerRegistros(String nombre, int limite) {
         List<Shard> shards;
         try {
@@ -59,27 +61,39 @@ public class KinesisAdminService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "El stream no existe");
         }
 
-        List<RegistroKinesis> resultado = new ArrayList<>();
+        Deque<RegistroKinesis> recientes = new ArrayDeque<>();
         for (Shard shard : shards) {
-            if (resultado.size() >= limite) {
-                break;
-            }
             String iterador = kinesis.getShardIterator(GetShardIteratorRequest.builder()
                     .streamName(nombre)
                     .shardId(shard.shardId())
                     .shardIteratorType(ShardIteratorType.TRIM_HORIZON)
                     .build()).shardIterator();
 
-            var respuesta = kinesis.getRecords(GetRecordsRequest.builder()
-                    .shardIterator(iterador)
-                    .limit(limite - resultado.size())
-                    .build());
+            // Kinesis entrega los registros por lotes: se recorre hasta llegar al final del shard.
+            for (int vuelta = 0; vuelta < 200 && iterador != null; vuelta++) {
+                var respuesta = kinesis.getRecords(GetRecordsRequest.builder()
+                        .shardIterator(iterador)
+                        .limit(1000)
+                        .build());
 
-            for (software.amazon.awssdk.services.kinesis.model.Record r : respuesta.records()) {
-                resultado.add(new RegistroKinesis(shard.shardId(), r.sequenceNumber(),
-                        r.approximateArrivalTimestamp(), r.partitionKey(), r.data().asUtf8String()));
+                for (software.amazon.awssdk.services.kinesis.model.Record r : respuesta.records()) {
+                    recientes.addLast(new RegistroKinesis(shard.shardId(), r.sequenceNumber(),
+                            r.approximateArrivalTimestamp(), r.partitionKey(), r.data().asUtf8String()));
+                    if (recientes.size() > limite) {
+                        recientes.removeFirst();
+                    }
+                }
+
+                iterador = respuesta.nextShardIterator();
+                Long atraso = respuesta.millisBehindLatest();
+                if (atraso == null || atraso == 0) {
+                    break;
+                }
             }
         }
+
+        List<RegistroKinesis> resultado = new ArrayList<>();
+        recientes.descendingIterator().forEachRemaining(resultado::add);
         return resultado;
     }
 }
