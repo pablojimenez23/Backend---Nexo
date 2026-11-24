@@ -15,11 +15,12 @@ public class PedidoClient {
     @Value("${internal.api.key}")
     private String internalApiKey;
 
-    public boolean pedidoCompletadoValido(UUID pedidoId, UUID clienteId) {
+    public boolean pedidoCompletadoValido(UUID pedidoId, UUID clienteId, String bearerToken) {
         try {
             Map<?, ?> respuesta = restClient.get()
                     .uri("/pedidos/{id}/verificar-completado?clienteId={clienteId}", pedidoId, clienteId)
                     .header("X-Internal-Key", internalApiKey)
+                    .header("Authorization", "Bearer " + bearerToken)
                     .retrieve()
                     .body(Map.class);
             return respuesta != null && Boolean.TRUE.equals(respuesta.get("valido"));

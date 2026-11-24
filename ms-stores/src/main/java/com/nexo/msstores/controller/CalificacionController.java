@@ -53,7 +53,7 @@ public class CalificacionController {
         Jwt jwt = (Jwt) auth.getPrincipal();
         UUID usuarioId = UUID.fromString(jwt.getSubject());
 
-        boolean valido = pedidoClient.pedidoCompletadoValido(request.pedidoId(), usuarioId, tiendaId);
+        boolean valido = pedidoClient.pedidoCompletadoValido(request.pedidoId(), usuarioId, tiendaId, jwt.getTokenValue());
         if (!valido) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Solo podés calificar tiendas de pedidos que hayas completado");

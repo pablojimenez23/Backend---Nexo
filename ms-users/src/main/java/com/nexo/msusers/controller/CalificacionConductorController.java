@@ -74,7 +74,7 @@ public class CalificacionConductorController {
         Jwt jwt = (Jwt) auth.getPrincipal();
         UUID usuarioId = UUID.fromString(jwt.getSubject());
 
-        boolean valido = pedidoClient.pedidoCompletadoValido(request.pedidoId(), usuarioId);
+        boolean valido = pedidoClient.pedidoCompletadoValido(request.pedidoId(), usuarioId, jwt.getTokenValue());
         if (!valido) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Solo podés calificar conductores de pedidos que hayas completado");
